@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Add Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="/css/styles.css">
+    <title>Walmart-LINAC Analysis</title>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            
+            <!-- Controls Panel -->
+            <div class="col-md-3 p-3 bg-light">
+                
+                <div class="controls-container">
+                    <div class="mb-3">
+                        <select id="state" class="form-select">
+                            <option value="all">Select State</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="radius" class="form-label">Radius: <span id="radius-value">35</span> miles</label>
+                        <input type="range" class="form-range" id="radius" min="5" max="100" value="35">
+                    </div>
+                    <button id="analyze" class="btn btn-primary w-100">Run Analysis</button>
+                </div>
+
+                <!-- Add the new button -->
+                <button id="toggle-walmarts" class="btn btn-outline-secondary w-100 mt-3">Hide Walmarts</button>
+
+                <div id="loading-spinner" class="text-center mt-4 d-none">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted mt-2">Loading...</p>
+                </div>
+                
+                <!-- Wrap all content that should be hidden during loading in a container -->
+                <div id="analysis-content" class="d-none">
+                    <div id="dashboard-metrics"></div>
+                    
+                    <div id="location-toggle-container" class="btn-group w-100 mt-3" role="group" aria-label="Location Toggle">
+                        <input type="radio" class="btn-check" name="location-toggle" id="linac-toggle" autocomplete="off" checked>
+                        <label class="btn btn-outline-secondary" for="linac-toggle">LINAC Centers</label>
+                        
+                        <input type="radio" class="btn-check" name="location-toggle" id="walmart-toggle" autocomplete="off">
+                        <label class="btn btn-outline-secondary" for="walmart-toggle">Walmarts</label>
+                    </div>
+                    
+                    <div id="location-list" class="mt-3 location-list-container"></div>
+                </div>
+            </div>
+            
+            <!-- Map Container -->
+            <div class="col-md-9 p-0">
+                <div id="map"></div>
+                <button id="dashboard-button" class="btn btn-primary position-fixed">Dashboard</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Bootstrap JS and its dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="/js/main.js"></script>
+
+    <!-- Add this right before the closing body tag -->
+    <div id="modal-overlay" class="d-none"></div>
+    <div id="dashboard-modal" class="custom-modal d-none">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dashboard-title">Dashboard</h5>
+                <button type="button" class="btn-close" id="close-modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="modal-dashboard-metrics" class="dashboard-grid"></div>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 

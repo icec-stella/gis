@@ -1,0 +1,285 @@
+/* Reset and base styles */
+body {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* Map styles */
+#map {
+    height: 100vh;
+    width: 100%;
+}
+
+/* Controls panel styles */
+.controls-container {
+    background-color: white;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Metrics dashboard styles */
+#dashboard-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
+}
+
+.metric-card {
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.metric-value {
+    font-size: 24px;
+    font-weight: bold;
+    color: #0d6efd;
+    margin-bottom: 5px;
+}
+
+.metric-label {
+    font-size: 14px;
+    color: #6c757d;
+}
+
+/* Legend styles */
+.legend {
+    background: white;
+    padding: 10px;
+    border-radius: 4px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.legend div {
+    margin: 5px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.legend img {
+    width: 12px;
+    height: 20px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    #dashboard-metrics {
+        grid-template-columns: 1fr;
+    }
+    
+    #map {
+        height: 70vh;
+    }
+}
+
+/* Add to the end of your existing CSS file */
+.walmart-marker {
+    font-size: 25px;
+    text-align: center;
+}
+
+.linac-marker {
+    font-size: 25px;
+    text-align: center;
+}
+
+/* Add custom styling for the range input */
+.form-range::-webkit-slider-runnable-track {
+    background-color: #dee2e6;
+}
+
+.form-range::-moz-range-track {
+    background-color: #dee2e6;
+}
+
+.form-range::-webkit-slider-thumb {
+    background-color: #0d6efd;
+}
+
+.form-range::-moz-range-thumb {
+    background-color: #0d6efd;
+}
+
+/* Location list styles */
+.location-list-container {
+    background: white;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.location-item {
+    padding: 10px;
+    border-bottom: 1px solid #dee2e6;
+    cursor: pointer;
+}
+
+.location-item:last-child {
+    border-bottom: none;
+}
+
+/* Update Toggle button styles */
+#location-toggle-container {
+    background: white;
+    border-radius: 8px;
+    padding: 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    overflow: hidden;
+    display: flex;
+}
+
+.btn-outline-secondary {
+    color: #6c757d;
+    border: none;
+    background-color: white;
+    padding: 8px 0;
+    border-radius: 0 !important;
+    flex: 1;
+    width: 50%;
+}
+
+.btn-outline-secondary:hover,
+.btn-check:checked + .btn-outline-secondary {
+    color: white;
+    background-color: #0d6efd;
+    border: none;
+}
+
+/* Ensure the unselected button stays white */
+.btn-check:not(:checked) + .btn-outline-secondary:hover {
+    background-color: white;
+    color: #6c757d;
+    border: none;
+}
+
+/* Make left panel scrollable */
+.col-md-3 {
+    height: 100vh;
+    overflow-y: auto;
+}
+
+/* Update location list container to remove fixed height */
+.location-list-container {
+    background: white;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Add loading spinner styles */
+#loading-spinner {
+    padding: 20px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+#loading-spinner .spinner-border {
+    width: 3rem;
+    height: 3rem;
+}
+
+#loading-spinner p {
+    margin-bottom: 0;
+}
+
+/* Dashboard button styles */
+#dashboard-button {
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+    padding: 8px 16px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    border: none;
+    background-color: white;
+    color: #6c757d;
+}
+
+#dashboard-button:hover {
+    background-color: white;
+    color: #0d6efd;
+    transform: translateY(-1px);
+    box-shadow: 0 3px 5px rgba(0,0,0,0.3);
+    transition: all 0.2s ease;
+}
+
+/* Modal styles */
+#modal-overlay {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 75%;  /* Same width as map container */
+    height: 100vh;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 1001;
+}
+
+.custom-modal {
+    position: fixed;
+    top: 50%;
+    right: 37.5%;  /* Position from right side of screen */
+    transform: translate(50%, -50%);  /* Adjust transform to work from right side */
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    z-index: 1002;
+    width: 60%;  /* Reduce width to ensure it fits */
+    max-width: 800px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    padding: 20px;  /* Match the body padding */
+    border-bottom: 1px solid #dee2e6;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-body {
+    padding: 20px;  /* Match the header padding */
+}
+
+.modal-title {
+    margin: 0;
+    color: #6c757d;
+}
+
+/* Modal dashboard grid styles */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    padding: 0;  /* Remove padding since modal-body handles it */
+}
+
+/* Update the toggle-walmarts button styles */
+#toggle-walmarts {
+    background-color: white;
+    color: #6c757d;
+    border: none;
+    border-radius: 8px;  /* Match the border-radius of other containers */
+    padding: 12px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    width: 100%;  /* Ensure it takes full width like other containers */
+}
+
+#toggle-walmarts:hover {
+    background-color: white;
+    color: #0d6efd;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+    transition: all 0.2s ease;
+}
+
+/* Update the location item hover state */
+.location-item:hover {
+    background-color: #f8f9fa;  /* Light grey background on hover */
+    transition: background-color 0.2s ease;
+} 
