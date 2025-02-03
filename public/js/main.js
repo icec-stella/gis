@@ -5,6 +5,7 @@ let linacMarkers = [];
 let radiusCircles = [];
 let stateLayer;
 let selectedLocationCircle = null;
+let usBoundaryLayer;
 
 const blueMarkerIcon = L.icon({
     iconUrl: '/images/markers/marker-icon-blue.png',
@@ -54,52 +55,122 @@ async function initializeMap() {
 
     legend.addTo(map);
 
+    // Load US boundary first
+    try {
+        const response = await fetch('/api/state-boundary/US');
+        if (!response.ok) {
+            throw new Error('Failed to load US boundary');
+        }
+        const data = await response.json();
+        usBoundaryLayer = L.geoJSON(data[0].geojson, {
+            style: {
+                color: '#0d6efd',
+                weight: 2,
+                fillOpacity: 0.05
+            }
+        }).addTo(map);
+    } catch (error) {
+        console.error('Error loading US boundary:', error);
+    }
+
     // Remove cluster group initialization
     await loadInitialMarkers();
 }
 
-// Update loadInitialMarkers to use regular markers
+// Add helper function to validate coordinates
+function isValidUSCoordinate(lat, lng) {
+    // Rough bounding box for continental US, Alaska, and Hawaii
+    const bounds = {
+        continental: {
+            lat: { min: 24.396308, max: 49.384358 },
+            lng: { min: -125.000000, max: -66.934570 }
+        },
+        alaska: {
+            lat: { min: 51.214183, max: 71.365162 },
+            lng: { min: -179.148909, max: -130.001476 }
+        },
+        hawaii: {
+            lat: { min: 18.910361, max: 22.236428 },
+            lng: { min: -160.236328, max: -154.808349 }
+        }
+    };
+
+    // Check if coordinates are within any of the US regions
+    return (
+        // Continental US
+        (lat >= bounds.continental.lat.min && lat <= bounds.continental.lat.max &&
+         lng >= bounds.continental.lng.min && lng <= bounds.continental.lng.max) ||
+        // Alaska
+        (lat >= bounds.alaska.lat.min && lat <= bounds.alaska.lat.max &&
+         lng >= bounds.alaska.lng.min && lng <= bounds.alaska.lng.max) ||
+        // Hawaii
+        (lat >= bounds.hawaii.lat.min && lat <= bounds.hawaii.lat.max &&
+         lng >= bounds.hawaii.lng.min && lng <= bounds.hawaii.lng.max)
+    );
+}
+
+// Update loadInitialMarkers function
 async function loadInitialMarkers() {
     try {
         const response = await fetch('/api/map-data?initial=true');
         const data = await response.json();
         
-        // Clear existing markers
         clearMap();
         
-        // Add Walmart markers
+        // Add Walmart markers only if within US bounds
         data.walmart.forEach(location => {
-            const marker = L.marker([location.latitude, location.longitude], {
-                icon: blueMarkerIcon
-            }).addTo(map);
+            const latLng = L.latLng(location.latitude, location.longitude);
             
-            marker.bindPopup(`
-                <strong>Walmart</strong><br>
-                ${location.name}<br>
-                ${location.street_address}<br>
-                ${location.city}, ${location.state}
-            `);
-            
-            walmartMarkers.push(marker);
-        });
-
-        // Add LINAC markers
-        data.linac
-            .filter(location => location.Latitude && location.Longitude)
-            .forEach(location => {
-                const marker = L.marker([location.Latitude, location.Longitude], {
-                    icon: redMarkerIcon
+            // Only add marker if within US bounds
+            if (usBoundaryLayer && usBoundaryLayer.getBounds().contains(latLng)) {
+                const marker = L.marker(latLng, {
+                    icon: blueMarkerIcon
                 }).addTo(map);
                 
                 marker.bindPopup(`
-                    <strong>LINAC Center</strong><br>
-                    ${location['LINAC Name']}
+                    <strong>Walmart</strong><br>
+                    ${location.name}<br>
+                    ${location.street_address}<br>
+                    ${location.city}, ${location.state}
                 `);
                 
-                linacMarkers.push(marker);
+                walmartMarkers.push(marker);
+            }
+        });
+
+        // Add LINAC markers only if within US bounds and has valid coordinates
+        data.linac
+            .filter(location => {
+                // Check if coordinates exist and are valid numbers
+                const hasValidCoords = location.Latitude && 
+                                     location.Longitude && 
+                                     !isNaN(location.Latitude) && 
+                                     !isNaN(location.Longitude);
+                
+                // Check if coordinates are within US bounds
+                return hasValidCoords && 
+                       isValidUSCoordinate(parseFloat(location.Latitude), 
+                                         parseFloat(location.Longitude));
+            })
+            .forEach(location => {
+                const latLng = L.latLng(location.Latitude, location.Longitude);
+                
+                // Additional check with US boundary layer if available
+                if (!usBoundaryLayer || usBoundaryLayer.getBounds().contains(latLng)) {
+                    const marker = L.marker(latLng, {
+                        icon: redMarkerIcon
+                    }).addTo(map);
+                    
+                    marker.bindPopup(`
+                        <strong>LINAC Center</strong><br>
+                        ${location['LINAC Name']}
+                    `);
+                    
+                    linacMarkers.push(marker);
+                }
             });
 
-        console.log(`Loaded ${walmartMarkers.length} Walmart markers and ${linacMarkers.length} LINAC markers`);
+        console.log(`Loaded ${walmartMarkers.length} Walmart markers and ${linacMarkers.length} LINAC markers within US bounds`);
     } catch (error) {
         console.error('Error loading initial markers:', error);
     }
@@ -133,7 +204,7 @@ function initializeEventListeners() {
     document.getElementById('linac-toggle').addEventListener('change', updateLocationList);
 
     // Update dashboard button click handler
-    document.getElementById('dashboard-button').addEventListener('click', () => {
+    document.getElementById('dashboard-button').addEventListener('click', async () => {
         const selectedState = document.getElementById('state').value;
         const dashboardTitle = document.getElementById('dashboard-title');
         
@@ -143,9 +214,53 @@ function initializeEventListeners() {
         } else {
             dashboardTitle.textContent = 'Dashboard';
         }
+
+        // Show loading state in modal
+        document.getElementById('modal-dashboard-metrics').innerHTML = `
+            <div class="text-center">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+            </div>
+        `;
         
+        // Show the modal
         document.getElementById('modal-overlay').classList.remove('d-none');
         document.getElementById('dashboard-modal').classList.remove('d-none');
+
+        // Fetch and display metrics for the current state
+        try {
+            const response = await fetch(`/api/metrics?state=${selectedState}`);
+            const metrics = await response.json();
+            
+            const metricsHTML = `
+                <div class="metric-card">
+                    <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
+                    <div class="metric-label">Walmarts Not Within 35 Miles of LINAC</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${metrics.walmartsWithinRange || 0}</div>
+                    <div class="metric-label">Total Walmarts in State</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${metrics.cityCentersWithinRange || 0}</div>
+                    <div class="metric-label">LINAC Centers in State</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${metrics.linacsWithinRange || 0}</div>
+                    <div class="metric-label">Total LINACs in State</div>
+                </div>
+            `;
+
+            document.getElementById('modal-dashboard-metrics').innerHTML = metricsHTML;
+        } catch (error) {
+            console.error('Error fetching metrics:', error);
+            document.getElementById('modal-dashboard-metrics').innerHTML = `
+                <div class="alert alert-danger">
+                    Error loading metrics. Please try again later.
+                </div>
+            `;
+        }
     });
 
     document.getElementById('close-modal').addEventListener('click', () => {
@@ -159,18 +274,29 @@ function initializeEventListeners() {
         document.getElementById('dashboard-modal').classList.add('d-none');
     });
 
-    // Add toggle Walmarts button listener
+    // Update toggle Walmarts button listener
     const toggleWalmartsBtn = document.getElementById('toggle-walmarts');
     toggleWalmartsBtn.addEventListener('click', () => {
         const isHiding = toggleWalmartsBtn.textContent === 'Hide Walmarts';
+        const selectedState = document.getElementById('state').value;
         
-        if (isHiding) {
-            hideWalmartsNearLinac();
-            toggleWalmartsBtn.textContent = 'Show All Walmarts';
-        } else {
-            showAllWalmarts();
-            toggleWalmartsBtn.textContent = 'Hide Walmarts';
+        // Only allow toggling if a state is selected (not US or all)
+        if (selectedState && selectedState !== 'all' && selectedState !== 'US') {
+            if (isHiding) {
+                hideWalmartsNearLinac();
+                toggleWalmartsBtn.textContent = 'Show All Walmarts';
+            } else {
+                showAllWalmarts();
+                toggleWalmartsBtn.textContent = 'Hide Walmarts';
+            }
         }
+    });
+
+    // Add table view button listener
+    document.getElementById('table-view-button').addEventListener('click', () => {
+        document.getElementById('modal-overlay').classList.remove('d-none');
+        document.getElementById('dashboard-modal').classList.remove('d-none');
+        createMetricsTable();
     });
 }
 
@@ -232,21 +358,21 @@ function calculateZoomLevel(radiusInMeters) {
     return 10;                                 // < 10 miles
 }
 
-// Display metrics in dashboard
+// Update displayMetrics function to only handle modal metrics
 function displayMetrics(metrics) {
-    const sideMetricsContainer = document.getElementById('dashboard-metrics');
+    // Don't do anything if we're in table view
+    const tableViewActive = document.getElementById('metrics-table-body') !== null;
+    if (tableViewActive) {
+        return;
+    }
+
+    // Only update the modal metrics
     const modalMetricsContainer = document.getElementById('modal-dashboard-metrics');
-    
-    console.log('Displaying metrics:', metrics);
+    if (!modalMetricsContainer) {
+        return;
+    }
     
     if (metrics) {
-        console.log('Metrics values:', {
-            outside: metrics.walmartsOutsideRange,
-            within: metrics.walmartsWithinRange,
-            centers: metrics.cityCentersWithinRange,
-            linacs: metrics.linacsWithinRange
-        });
-
         const metricsHTML = `
             <div class="metric-card">
                 <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
@@ -266,13 +392,9 @@ function displayMetrics(metrics) {
             </div>
         `;
 
-        // Update both containers
         modalMetricsContainer.innerHTML = metricsHTML;
-        sideMetricsContainer.innerHTML = ''; // Clear the side metrics
     } else {
-        console.log('No metrics data received');
         modalMetricsContainer.innerHTML = '';
-        sideMetricsContainer.innerHTML = '';
     }
 }
 
@@ -358,6 +480,7 @@ async function populateStateDropdown() {
         const defaultOption = document.createElement('option');
         defaultOption.value = 'all';
         defaultOption.textContent = 'Select State';
+        defaultOption.disabled = true;
         stateSelect.insertBefore(defaultOption, stateSelect.firstChild);
         
         // Add all states
@@ -418,7 +541,7 @@ async function loadStateBoundary(state) {
     }
 }
 
-// Update updateAnalysis function to handle boundary loading failures
+// Update updateAnalysis function to properly filter markers
 async function updateAnalysis() {
     const state = document.getElementById('state').value;
 
@@ -432,6 +555,22 @@ async function updateAnalysis() {
     try {
         showLoading();
 
+        // Remove US boundary if it exists
+        if (usBoundaryLayer) {
+            map.removeLayer(usBoundaryLayer);
+            usBoundaryLayer = null;
+        }
+
+        // Hide all markers first
+        walmartMarkers.forEach(marker => {
+            marker.setOpacity(0);
+            marker.closePopup();
+        });
+        linacMarkers.forEach(marker => {
+            marker.setOpacity(0);
+            marker.closePopup();
+        });
+
         if (state === 'US') {
             // Clear any existing state boundary
             if (stateLayer) {
@@ -439,35 +578,31 @@ async function updateAnalysis() {
                 stateLayer = null;
             }
             
+            // Show all markers for US view
+            walmartMarkers.forEach(marker => marker.setOpacity(1));
+            linacMarkers.forEach(marker => marker.setOpacity(1));
+            
             // Set view to continental US
             map.setView([39.8283, -98.5795], 4);
 
-            // Calculate nationwide metrics
-            const walmartsNotNearLinac = walmartMarkers.filter(walmartMarker => {
-                // Check if this Walmart is within 35 miles of any LINAC
-                const isNearAnyLinac = linacMarkers.some(linacMarker => {
-                    const distance = walmartMarker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
-                    return distance <= 35;
-                });
-                return !isNearAnyLinac;
-            });
+            // Add back the US boundary for US view
+            const response = await fetch('/api/state-boundary/US');
+            if (response.ok) {
+                const data = await response.json();
+                usBoundaryLayer = L.geoJSON(data[0].geojson, {
+                    style: {
+                        color: '#0d6efd',
+                        weight: 2,
+                        fillOpacity: 0.05
+                    }
+                }).addTo(map);
+            }
 
-            // Update metrics for nationwide view
-            const metrics = {
-                walmartsOutsideRange: walmartsNotNearLinac.length,
-                walmartsWithinRange: walmartMarkers.length,
-                cityCentersWithinRange: linacMarkers.length,
-                linacsWithinRange: linacMarkers.length
-            };
-
-            console.log('\nNationwide Metrics:');
-            console.log('Total Walmarts:', metrics.walmartsWithinRange);
-            console.log('Walmarts Not Near LINAC:', metrics.walmartsOutsideRange);
-            console.log('Total LINAC Centers:', metrics.cityCentersWithinRange);
-            console.log('Total LINACs:', metrics.linacsWithinRange);
+            // Get nationwide metrics from server
+            const metricsResponse = await fetch('/api/metrics?state=US');
+            const metrics = await metricsResponse.json();
 
             displayMetrics(metrics);
-            updateLocationList();
         } else {
             // Load state boundary and wait for result
             const boundaryLoaded = await loadStateBoundary(state);
@@ -476,49 +611,81 @@ async function updateAnalysis() {
                 throw new Error('Failed to load state boundary');
             }
 
-            console.log(`\n=== Analysis for ${state} ===`);
-            console.log('Total Walmarts loaded:', walmartMarkers.length);
-            console.log('Total LINAC Centers loaded:', linacMarkers.length);
-
-            const walmartInState = walmartMarkers.filter(marker => 
-                stateLayer.getBounds().contains(marker.getLatLng())
-            );
-            const linacInState = linacMarkers.filter(marker => 
-                stateLayer.getBounds().contains(marker.getLatLng())
-            );
-
-            const walmartsNotNearLinac = walmartInState.filter(walmartMarker => {
-                const isNearAnyLinac = linacInState.some(linacMarker => {
-                    const distance = walmartMarker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
-                    return distance <= 35;
-                });
-                return !isNearAnyLinac;
+            // Show only markers within state bounds using point-in-polygon check
+            walmartMarkers.forEach(marker => {
+                const isInState = stateLayer.getBounds().contains(marker.getLatLng()) &&
+                                isPointInPolygon(marker.getLatLng(), stateLayer);
+                marker.setOpacity(isInState ? 1 : 0);
+                if (!isInState) {
+                    marker.closePopup();
+                }
             });
 
-            const metrics = {
-                walmartsOutsideRange: walmartsNotNearLinac.length,
-                walmartsWithinRange: walmartInState.length,
-                cityCentersWithinRange: linacInState.length,
-                linacsWithinRange: linacInState.length
-            };
+            linacMarkers.forEach(marker => {
+                const isInState = stateLayer.getBounds().contains(marker.getLatLng()) &&
+                                isPointInPolygon(marker.getLatLng(), stateLayer);
+                marker.setOpacity(isInState ? 1 : 0);
+                if (!isInState) {
+                    marker.closePopup();
+                }
+            });
+
+            // Get state metrics from server
+            const response = await fetch(`/api/metrics?state=${state}`);
+            const metrics = await response.json();
 
             displayMetrics(metrics);
-            updateLocationList();
         }
 
+        updateLocationList();
         hideLoading();
     } catch (error) {
         console.error('Error updating analysis:', error);
         hideLoading();
-        
-        // Show error message to user
-        const metricsContainer = document.getElementById('dashboard-metrics');
-        metricsContainer.innerHTML = `
-            <div class="alert alert-danger">
-                Error loading state data. Please try again later.
-            </div>
-        `;
     }
+}
+
+// Add helper function to check if a point is inside a polygon
+function isPointInPolygon(point, layer) {
+    let inside = false;
+    const lat = point.lat;
+    const lng = point.lng;
+
+    // Get all polygons from the layer
+    layer.eachLayer(function(polygon) {
+        if (polygon.feature && polygon.feature.geometry) {
+            const coordinates = polygon.feature.geometry.coordinates;
+
+            // Handle both Polygon and MultiPolygon
+            if (polygon.feature.geometry.type === 'Polygon') {
+                if (isPointInCoordinates(lat, lng, coordinates[0])) {
+                    inside = true;
+                }
+            } else if (polygon.feature.geometry.type === 'MultiPolygon') {
+                coordinates.forEach(poly => {
+                    if (isPointInCoordinates(lat, lng, poly[0])) {
+                        inside = true;
+                    }
+                });
+            }
+        }
+    });
+
+    return inside;
+}
+
+// Helper function for point-in-polygon calculation
+function isPointInCoordinates(lat, lng, coords) {
+    let inside = false;
+    for (let i = 0, j = coords.length - 1; i < coords.length; j = i++) {
+        const xi = coords[i][0], yi = coords[i][1];
+        const xj = coords[j][0], yj = coords[j][1];
+
+        const intersect = ((yi > lat) !== (yj > lat)) &&
+            (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+    }
+    return inside;
 }
 
 // Update the location list function to only show visible Walmart markers
@@ -603,32 +770,32 @@ function updateLocationList() {
                         map.removeLayer(selectedLocationCircle);
                     }
                     
-                    // Create new circle
-                    selectedLocationCircle = L.circle(location, {
-                        radius: radius * 1609.34, // Convert miles to meters
-                        color: 'red',
-                        fillColor: '#f03',
-                        fillOpacity: 0.1
-                    }).addTo(map);
-                    
                     // Calculate appropriate zoom level based on radius
                     const zoomLevel = calculateZoomLevel(radius * 1609.34);
                     
-                    // Get the sidebar width
-                    const sidebarWidth = document.querySelector('.col-md-3').getBoundingClientRect().width;
-                    
-                    // Calculate the center point with offset
-                    const targetLatLng = map.layerPointToLatLng(
-                        map.latLngToLayerPoint(location).add([sidebarWidth/2, 0])
-                    );
-                    
-                    // Set the view to the offset center
-                    map.setView(targetLatLng, zoomLevel, {
+                    // First zoom out
+                    map.setZoom(5, {
                         animate: true,
-                        duration: 0.3
+                        duration: 0.5
                     });
                     
-                    marker.openPopup();
+                    // Then after a delay, zoom into the new location
+                    setTimeout(() => {
+                        map.setView(location, zoomLevel, {
+                            animate: true,
+                            duration: 0.5
+                        });
+                        
+                        // Create new circle after zooming in
+                        selectedLocationCircle = L.circle(location, {
+                            radius: radius * 1609.34, // Convert miles to meters
+                            color: 'red',
+                            fillColor: '#f03',
+                            fillOpacity: 0.1
+                        }).addTo(map);
+                        
+                        marker.openPopup();
+                    }, 600); // Wait for zoom out animation to complete
                 });
                 
                 listContainer.appendChild(div);
@@ -662,30 +829,34 @@ async function initializeApp() {
     await initializeMap();
     initializeEventListeners();
     await populateStateDropdown();
-    
-    const metricsContainer = document.getElementById('dashboard-metrics');
-    metricsContainer.innerHTML = '';
 }
 
 // Call initialization when the page loads
 document.addEventListener('DOMContentLoaded', initializeApp);
 
-// Update hideWalmartsNearLinac to trigger list update
+// Update hideWalmartsNearLinac to use point-in-polygon check
 function hideWalmartsNearLinac() {
     if (!stateLayer) return;
 
+    // Get Walmarts that are actually within the state polygon
     const walmartInState = walmartMarkers.filter(marker => 
-        stateLayer.getBounds().contains(marker.getLatLng())
+        stateLayer.getBounds().contains(marker.getLatLng()) &&
+        isPointInPolygon(marker.getLatLng(), stateLayer)
     );
+
     const linacInState = linacMarkers.filter(marker => 
-        stateLayer.getBounds().contains(marker.getLatLng())
+        stateLayer.getBounds().contains(marker.getLatLng()) &&
+        isPointInPolygon(marker.getLatLng(), stateLayer)
     );
 
     walmartInState.forEach(walmartMarker => {
-        // Check if this Walmart is within 35 miles of any LINAC
+        // Get the current radius value from the input
+        const radiusValue = parseFloat(document.getElementById('radius').value);
+        
+        // Check if this Walmart is within the specified radius of any LINAC
         const isNearLinac = linacInState.some(linacMarker => {
             const distance = walmartMarker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
-            return distance <= 35;
+            return distance <= radiusValue;
         });
 
         if (isNearLinac) {
@@ -698,18 +869,108 @@ function hideWalmartsNearLinac() {
     updateLocationList();
 }
 
-// Update showAllWalmarts to trigger list update
+// Update showAllWalmarts to use point-in-polygon check
 function showAllWalmarts() {
     if (!stateLayer) return;
 
-    const walmartInState = walmartMarkers.filter(marker => 
-        stateLayer.getBounds().contains(marker.getLatLng())
-    );
-
-    walmartInState.forEach(marker => {
-        marker.setOpacity(1);  // Show the marker
+    // Show only Walmarts that are actually within the state polygon
+    walmartMarkers.forEach(marker => {
+        const isInState = stateLayer.getBounds().contains(marker.getLatLng()) &&
+                         isPointInPolygon(marker.getLatLng(), stateLayer);
+        marker.setOpacity(isInState ? 1 : 0);
+        if (!isInState) {
+            marker.closePopup();
+        }
     });
 
     // Update the location list to show all markers again
     updateLocationList();
+}
+
+// Update createMetricsTable function
+function createMetricsTable() {
+    // Get all states and sort them
+    const states = Array.from(document.getElementById('state').options)
+        .map(option => ({ value: option.value, text: option.text }))
+        .filter(option => option.value !== 'all' && option.value !== 'US')
+        .sort((a, b) => a.text.localeCompare(b.text));
+    
+    // Create table HTML
+    let tableHTML = `
+        <table class="table table-striped table-hover">
+            <thead class="table-light">
+                <tr>
+                    <th>State</th>
+                    <th class="text-end">Walmarts Not Within<br>35 Miles of LINAC</th>
+                    <th class="text-end">Total Walmarts<br>in State</th>
+                    <th class="text-end">LINAC Centers<br>in State</th>
+                    <th class="text-end">Total LINACs<br>in State</th>
+                </tr>
+            </thead>
+            <tbody id="metrics-table-body">
+                <tr>
+                    <td colspan="5" class="text-center">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    `;
+
+    // Update modal content
+    const modalContent = document.getElementById('dashboard-modal');
+    modalContent.innerHTML = `
+        <div class="modal-header">
+            <h5 class="modal-title">State Metrics Table</h5>
+            <button type="button" class="btn-close" id="close-modal"></button>
+        </div>
+        <div class="modal-body" style="max-height: 80vh; overflow-y: auto;">
+            ${tableHTML}
+        </div>
+    `;
+
+    // Reattach close button listener
+    document.getElementById('close-modal').addEventListener('click', () => {
+        document.getElementById('modal-overlay').classList.add('d-none');
+        document.getElementById('dashboard-modal').classList.add('d-none');
+    });
+
+    // Populate table data
+    populateTableData(states);
+}
+
+// Update populateTableData function
+async function populateTableData(states) {
+    const tableBody = document.getElementById('metrics-table-body');
+    let tableRows = '';
+
+    // Process each state
+    for (const state of states) {
+        try {
+            const response = await fetch(`/api/metrics?state=${state.value}`);
+            const metrics = await response.json();
+
+            tableRows += `
+                <tr>
+                    <td>${state.text}</td>
+                    <td class="text-end">${metrics.walmartsOutsideRange.toLocaleString()}</td>
+                    <td class="text-end">${metrics.walmartsWithinRange.toLocaleString()}</td>
+                    <td class="text-end">${metrics.cityCentersWithinRange.toLocaleString()}</td>
+                    <td class="text-end">${metrics.linacsWithinRange.toLocaleString()}</td>
+                </tr>
+            `;
+        } catch (error) {
+            console.error(`Error fetching metrics for ${state.text}:`, error);
+            tableRows += `
+                <tr>
+                    <td>${state.text}</td>
+                    <td colspan="4" class="text-center text-danger">Error loading data</td>
+                </tr>
+            `;
+        }
+    }
+
+    tableBody.innerHTML = tableRows;
 } 

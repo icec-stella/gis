@@ -24,6 +24,7 @@ const cache = new NodeCache({ stdTTL: 600 }); // Cache for 10 minutes
 
 // Add state abbreviation mapping
 const stateMapping = {
+    'US': 'United States',
     'AL': 'Alabama',
     'AK': 'Alaska',
     'AZ': 'Arizona',
@@ -76,6 +77,14 @@ const stateMapping = {
     'WY': 'Wyoming'
 };
 
+// Add reverse state mapping (full name to abbreviation)
+const reverseStateMapping = Object.entries(stateMapping).reduce((acc, [abbr, full]) => {
+    if (abbr !== 'US') {  // Skip the US mapping
+        acc[full.toUpperCase()] = abbr;
+    }
+    return acc;
+}, {});
+
 // Basic route
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, '../public/index.html'));
@@ -127,95 +136,113 @@ app.get('/api/map-data', (req, res) => {
     res.json(result);
 });
 
-app.get('/api/metrics', (req, res) => {
-    const city = req.query.city;
-    const radius = parseFloat(req.query.radius) || 35;
+app.get('/api/metrics', async (req, res) => {
+    const stateAbbr = req.query.state;
     
-    const selectedCenter = cityCenters.find(location => location.Cities === city);
-    
-    if (selectedCenter) {
-        let walmartsWithinRange = 0;
-        let walmartsOutsideRange = 0;
-        let distances = [];  // Store all distances for calculations
-        let stateWalmarts = 0;  // Count Walmarts in same state
-        
-        // Calculate distances and counts
-        walmartLocations.forEach((walmart) => {
-            if (!walmart.latitude || !walmart.longitude) return;
+    if (!stateAbbr) {
+        return res.status(400).json({ error: 'State parameter is required' });
+    }
 
-            const distance = calculateDistance(
-                parseFloat(walmart.latitude),
-                parseFloat(walmart.longitude),
-                parseFloat(selectedCenter.Latitude),
-                parseFloat(selectedCenter.Longtitude)
-            );
-            
-            // Store distance for calculations
-            distances.push({
-                distance: distance,
-                walmart: walmart
+    try {
+        if (stateAbbr === 'US') {
+            // Calculate nationwide totals
+            const totalCenters = cityCenters.reduce((sum, center) => 
+                sum + (parseInt(center['Number of LINAC Centers']) || 0), 0);
+            const totalLinacs = cityCenters.reduce((sum, center) => 
+                sum + (parseInt(center['Number of LINACs']) || 0), 0);
+
+            // Calculate Walmarts not within range of any LINAC
+            const walmartsOutsideRange = walmartLocations.filter(walmart => {
+                if (!walmart.latitude || !walmart.longitude) return true;
+
+                const isNearLinac = linacLocations.some(linac => {
+                    if (!linac.Latitude || !linac.Longitude) return false;
+                    
+                    const distance = calculateDistance(
+                        parseFloat(walmart.latitude),
+                        parseFloat(walmart.longitude),
+                        parseFloat(linac.Latitude),
+                        parseFloat(linac.Longitude)
+                    );
+                    return distance <= 35;
+                });
+                return !isNearLinac;
+            }).length;
+
+            return res.json({
+                walmartsOutsideRange,
+                walmartsWithinRange: walmartLocations.length,
+                cityCentersWithinRange: totalCenters,
+                linacsWithinRange: totalLinacs
             });
+        }
 
-            // Count Walmarts in same state
-            if (walmart.state === selectedCenter.States) {
-                stateWalmarts++;
-            }
+        // Get full state name
+        const fullStateName = stateMapping[stateAbbr];
 
-            if (distance <= radius) {
-                walmartsWithinRange++;
-            } else {
-                walmartsOutsideRange++;
-            }
+        // Filter locations by state
+        const stateWalmarts = walmartLocations.filter(location => location.state === stateAbbr);
+        
+        // Get LINAC centers from city-centers.json for the state
+        const stateCenters = cityCenters.filter(center => 
+            center.States === stateAbbr && 
+            center['Number of LINAC Centers'] && 
+            center['Number of LINACs']
+        );
+
+        // Calculate total centers and LINACs for the state
+        const totalCenters = stateCenters.reduce((sum, center) => 
+            sum + (parseInt(center['Number of LINAC Centers']) || 0), 0);
+        const totalLinacs = stateCenters.reduce((sum, center) => 
+            sum + (parseInt(center['Number of LINACs']) || 0), 0);
+
+        // Get LINAC locations for distance calculations
+        const stateLinacs = linacLocations.filter(location => {
+            const hasValidCoords = location.Latitude && 
+                                 location.Longitude && 
+                                 !isNaN(location.Latitude) && 
+                                 !isNaN(location.Longitude);
+            
+            // Use coordinates to determine if the LINAC is in the state
+            if (!hasValidCoords) return false;
+
+            // Check if any city center in the state matches these coordinates
+            return stateCenters.some(center => 
+                Math.abs(parseFloat(center.Latitude) - parseFloat(location.Latitude)) < 0.01 &&
+                Math.abs(parseFloat(center.Longtitude) - parseFloat(location.Longitude)) < 0.01
+            );
         });
 
-        // Sort distances for calculations
-        distances.sort((a, b) => a.distance - b.distance);
+        // Calculate Walmarts not within range of any LINAC
+        const walmartsOutsideRange = stateWalmarts.filter(walmart => {
+            if (!walmart.latitude || !walmart.longitude) return true;
+
+            const isNearLinac = stateLinacs.some(linac => {
+                if (!linac.Latitude || !linac.Longitude) return false;
+                
+                const distance = calculateDistance(
+                    parseFloat(walmart.latitude),
+                    parseFloat(walmart.longitude),
+                    parseFloat(linac.Latitude),
+                    parseFloat(linac.Longitude)
+                );
+                return distance <= 35;
+            });
+            return !isNearLinac;
+        }).length;
 
         const metrics = {
-            // Original metrics
             walmartsOutsideRange,
-            walmartsWithinRange,
-            cityCentersWithinRange: selectedCenter['Number of LINAC Centers'],
-            linacsWithinRange: selectedCenter['Number of LINACs'],
-            
-            // Distance metrics
-            nearestWalmart: distances[0]?.distance.toFixed(1) || 0,
-            furthestWalmart: distances[distances.length - 1]?.distance.toFixed(1) || 0,
-            averageDistance: (distances.reduce((sum, d) => sum + d.distance, 0) / distances.length).toFixed(1),
-            
-            // Coverage metrics
-            walmartCoveragePercent: ((walmartsWithinRange / stateWalmarts) * 100).toFixed(1),
-            walmartDensity: (walmartsWithinRange / (Math.PI * Math.pow(radius, 2))).toFixed(2),
-            
-            // Range breakdown
-            within5Miles: distances.filter(d => d.distance <= 5).length,
-            within15Miles: distances.filter(d => d.distance <= 15).length,
-            within25Miles: distances.filter(d => d.distance <= 25).length,
-            
-            // State metrics
-            totalStateWalmarts: stateWalmarts,
-            stateCoveragePercent: ((walmartsWithinRange / stateWalmarts) * 100).toFixed(1)
+            walmartsWithinRange: stateWalmarts.length,
+            cityCentersWithinRange: totalCenters,
+            linacsWithinRange: totalLinacs
         };
-        
+
+        console.log('Metrics for', stateAbbr, ':', metrics);
         res.json(metrics);
-    } else {
-        res.json({
-            // Include all metrics with zero/null values
-            walmartsOutsideRange: 0,
-            walmartsWithinRange: 0,
-            cityCentersWithinRange: 0,
-            linacsWithinRange: 0,
-            nearestWalmart: 0,
-            furthestWalmart: 0,
-            averageDistance: 0,
-            walmartCoveragePercent: 0,
-            walmartDensity: 0,
-            within5Miles: 0,
-            within15Miles: 0,
-            within25Miles: 0,
-            totalStateWalmarts: 0,
-            stateCoveragePercent: 0
-        });
+    } catch (error) {
+        console.error('Error calculating state metrics:', error);
+        res.status(500).json({ error: 'Failed to calculate metrics' });
     }
 });
 
@@ -229,7 +256,10 @@ app.get('/api/state-boundary/:state', async (req, res) => {
         console.log(`[Backend] Using full state name: ${fullStateName}`);
 
         const stateQuery = `${fullStateName}, United States`;
-        const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(stateQuery)}&format=json&polygon_geojson=1&countrycodes=us`;
+        // For US boundary, we want admin_level=2 to get the country boundary
+        const nominatimUrl = req.params.state === 'US' 
+            ? `https://nominatim.openstreetmap.org/search?q=United States&format=json&polygon_geojson=1&countrycodes=us&featuretype=country`
+            : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(stateQuery)}&format=json&polygon_geojson=1&countrycodes=us`;
         
         console.log(`[Backend] Making request to Nominatim URL: ${nominatimUrl}`);
 
@@ -244,27 +274,28 @@ app.get('/api/state-boundary/:state', async (req, res) => {
         
         if (!nominatimData || nominatimData.length === 0) {
             console.log('[Backend] No results from Nominatim');
-            return res.status(404).json({ error: 'State boundary not found' });
+            return res.status(404).json({ error: 'Boundary not found' });
         }
 
-        // Find the state-level result
-        const stateData = nominatimData.find(item => 
-            item.osm_type === 'relation' && 
-            item.class === 'boundary' && 
-            item.type === 'administrative' &&
-            item.geojson
-        );
+        // Find the appropriate boundary
+        const boundaryData = req.params.state === 'US'
+            ? nominatimData.find(item => item.class === 'boundary' && item.type === 'administrative' && item.geojson)
+            : nominatimData.find(item => 
+                item.osm_type === 'relation' && 
+                item.class === 'boundary' && 
+                item.type === 'administrative' &&
+                item.geojson
+            );
 
-        if (!stateData || !stateData.geojson) {
-            console.log('[Backend] No matching state boundary found');
-            return res.status(404).json({ error: 'State boundary not found' });
+        if (!boundaryData || !boundaryData.geojson) {
+            console.log('[Backend] No matching boundary found');
+            return res.status(404).json({ error: 'Boundary not found' });
         }
 
-        // Send just the array containing the state data
-        res.json([{ geojson: stateData.geojson }]);
+        res.json([{ geojson: boundaryData.geojson }]);
     } catch (error) {
-        console.error('[Backend] Error fetching state boundary:', error);
-        res.status(500).json({ error: 'Failed to fetch state boundary' });
+        console.error('[Backend] Error fetching boundary:', error);
+        res.status(500).json({ error: 'Failed to fetch boundary' });
     }
 });
 

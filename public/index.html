@@ -19,7 +19,6 @@
                 <div class="controls-container">
                     <div class="mb-3">
                         <select id="state" class="form-select">
-                            <option value="all">Select State</option>
                         </select>
                     </div>
                     <div class="mb-3">
@@ -41,8 +40,6 @@
                 
                 <!-- Wrap all content that should be hidden during loading in a container -->
                 <div id="analysis-content" class="d-none">
-                    <div id="dashboard-metrics"></div>
-                    
                     <div id="location-toggle-container" class="btn-group w-100 mt-3" role="group" aria-label="Location Toggle">
                         <input type="radio" class="btn-check" name="location-toggle" id="linac-toggle" autocomplete="off" checked>
                         <label class="btn btn-outline-secondary" for="linac-toggle">LINAC Centers</label>
@@ -58,7 +55,10 @@
             <!-- Map Container -->
             <div class="col-md-9 p-0">
                 <div id="map"></div>
-                <button id="dashboard-button" class="btn btn-primary position-fixed">Dashboard</button>
+                <div class="map-buttons position-fixed d-flex gap-2">
+                    <button id="table-view-button" class="btn btn-primary">View Table</button>
+                    <button id="dashboard-button" class="btn btn-primary">Dashboard</button>
+                </div>
             </div>
         </div>
     </div>

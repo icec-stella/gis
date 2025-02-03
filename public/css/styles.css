@@ -12,6 +12,11 @@ body {
     width: 100%;
 }
 
+.map-buttons {
+    z-index: 9999;
+    top: 20px;
+    right: 20px;
+}
 /* Controls panel styles */
 .controls-container {
     background-color: white;
