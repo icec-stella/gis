@@ -11,16 +11,53 @@ const walmartLocations = require('./src/data/walmart-locations.json');
 const cityCenters = require('./src/data/city-centers.json');
 const linacLocations = require('./src/data/linac-locations.json');
 
+// Add detailed startup logging
+console.log('\n=== SERVER STARTUP ===');
+console.log(`Total Walmart locations loaded: ${walmartLocations.length}`);
+console.log('Walmart locations by state:');
+const stateCount = {};
+walmartLocations.forEach(w => {
+    stateCount[w.state] = (stateCount[w.state] || 0) + 1;
+});
+Object.entries(stateCount).sort().forEach(([state, count]) => {
+    console.log(`${state}: ${count} locations`);
+});
+
+console.log('Loaded data:');
+console.log(`Total Walmart locations: ${walmartLocations.length}`);
+console.log('Sample Walmart location:', walmartLocations[0]);
+
 const app = express();
-const PORT = process.env.PORT || 5002;
+
+// Try to use the specified port
+function tryPort(port) {
+    const server = app.listen(port)
+        .on('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                console.error(`Port ${port} is already in use. Please free up the port or use a different one.`);
+                process.exit(1);
+            }
+        })
+        .on('listening', () => {
+            console.log(`Server running at http://localhost:${port}`);
+        });
+}
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Add caching for API responses
-const cache = new NodeCache({ stdTTL: 600 }); // Cache for 10 minutes
+// Add stronger cache control headers for all responses
+app.use((req, res, next) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Expires', '-1');
+    res.set('Pragma', 'no-cache');
+    next();
+});
+
+// Reduce the cache TTL
+const cache = new NodeCache({ stdTTL: 60 }); // Cache for 1 minute instead of 10
 
 // Add state abbreviation mapping
 const stateMapping = {
@@ -138,112 +175,91 @@ app.get('/api/map-data', (req, res) => {
 
 app.get('/api/metrics', async (req, res) => {
     const stateAbbr = req.query.state;
-    
-    if (!stateAbbr) {
-        return res.status(400).json({ error: 'State parameter is required' });
-    }
+    const radius = parseFloat(req.query.radius) || 35;
 
-    try {
-        if (stateAbbr === 'US') {
-            // Calculate nationwide totals
-            const totalCenters = cityCenters.reduce((sum, center) => 
-                sum + (parseInt(center['Number of LINAC Centers']) || 0), 0);
-            const totalLinacs = cityCenters.reduce((sum, center) => 
-                sum + (parseInt(center['Number of LINACs']) || 0), 0);
+    // Use walmartLocations for Walmart map pins
+    const stateWalmarts = walmartLocations.filter(w => w.state === stateAbbr);
 
-            // Calculate Walmarts not within range of any LINAC
-            const walmartsOutsideRange = walmartLocations.filter(walmart => {
-                if (!walmart.latitude || !walmart.longitude) return true;
+    // Use all LINAC locations with valid coordinates
+    const validLinacs = linacLocations.filter(linac => 
+        linac.Latitude && 
+        linac.Longitude
+    );
 
-                const isNearLinac = linacLocations.some(linac => {
-                    if (!linac.Latitude || !linac.Longitude) return false;
-                    
-                    const distance = calculateDistance(
-                        parseFloat(walmart.latitude),
-                        parseFloat(walmart.longitude),
-                        parseFloat(linac.Latitude),
-                        parseFloat(linac.Longitude)
-                    );
-                    return distance <= 35;
-                });
-                return !isNearLinac;
-            }).length;
+    console.log(`Found ${validLinacs.length} valid LINAC locations nationwide`);
 
-            return res.json({
-                walmartsOutsideRange,
-                walmartsWithinRange: walmartLocations.length,
-                cityCentersWithinRange: totalCenters,
-                linacsWithinRange: totalLinacs
-            });
+    let walmartsOutsideCount = 0;
+
+    for (const walmart of stateWalmarts) {
+        if (!walmart.latitude || !walmart.longitude) {
+            console.log(`Skipping Walmart (${walmart.name}) due to missing coordinates`);
+            walmartsOutsideCount++;
+            continue;
         }
 
-        // Get full state name
-        const fullStateName = stateMapping[stateAbbr];
+        let isWithinRange = false;
+        let shortestDistance = Infinity;
 
-        // Filter locations by state
-        const stateWalmarts = walmartLocations.filter(location => location.state === stateAbbr);
-        
-        // Get LINAC centers from city-centers.json for the state
-        const stateCenters = cityCenters.filter(center => 
-            center.States === stateAbbr && 
-            center['Number of LINAC Centers'] && 
-            center['Number of LINACs']
-        );
-
-        // Calculate total centers and LINACs for the state
-        const totalCenters = stateCenters.reduce((sum, center) => 
-            sum + (parseInt(center['Number of LINAC Centers']) || 0), 0);
-        const totalLinacs = stateCenters.reduce((sum, center) => 
-            sum + (parseInt(center['Number of LINACs']) || 0), 0);
-
-        // Get LINAC locations for distance calculations
-        const stateLinacs = linacLocations.filter(location => {
-            const hasValidCoords = location.Latitude && 
-                                 location.Longitude && 
-                                 !isNaN(location.Latitude) && 
-                                 !isNaN(location.Longitude);
-            
-            // Use coordinates to determine if the LINAC is in the state
-            if (!hasValidCoords) return false;
-
-            // Check if any city center in the state matches these coordinates
-            return stateCenters.some(center => 
-                Math.abs(parseFloat(center.Latitude) - parseFloat(location.Latitude)) < 0.01 &&
-                Math.abs(parseFloat(center.Longtitude) - parseFloat(location.Longitude)) < 0.01
+        for (const linac of validLinacs) {
+            const distance = calculateDistance(
+                parseFloat(walmart.latitude),
+                parseFloat(walmart.longitude),
+                parseFloat(linac.Latitude),
+                parseFloat(linac.Longitude)
             );
-        });
 
-        // Calculate Walmarts not within range of any LINAC
-        const walmartsOutsideRange = stateWalmarts.filter(walmart => {
-            if (!walmart.latitude || !walmart.longitude) return true;
+            if (distance < shortestDistance) {
+                shortestDistance = distance;
+            }
 
-            const isNearLinac = stateLinacs.some(linac => {
-                if (!linac.Latitude || !linac.Longitude) return false;
-                
-                const distance = calculateDistance(
-                    parseFloat(walmart.latitude),
-                    parseFloat(walmart.longitude),
-                    parseFloat(linac.Latitude),
-                    parseFloat(linac.Longitude)
-                );
-                return distance <= 35;
-            });
-            return !isNearLinac;
-        }).length;
+            if (distance <= radius) {
+                isWithinRange = true;
+                break;
+            }
+        }
 
-        const metrics = {
-            walmartsOutsideRange,
-            walmartsWithinRange: stateWalmarts.length,
-            cityCentersWithinRange: totalCenters,
-            linacsWithinRange: totalLinacs
-        };
+        console.log(`Walmart (${walmart.name}) shortest distance to any LINAC: ${shortestDistance} miles`);
 
-        console.log('Metrics for', stateAbbr, ':', metrics);
-        res.json(metrics);
-    } catch (error) {
-        console.error('Error calculating state metrics:', error);
-        res.status(500).json({ error: 'Failed to calculate metrics' });
+        if (!isWithinRange) {
+            console.log(`Walmart (${walmart.name}) is outside the ${radius} mile radius of any LINAC`);
+            walmartsOutsideCount++;
+        }
     }
+
+    console.log(`Total Walmarts outside ${radius} mile radius: ${walmartsOutsideCount}`);
+
+    const totalWalmarts = stateWalmarts.length;
+
+    // Calculate LINAC Centers and Total LINACs in the state
+    let totalCenters = 0;
+    let totalLinacs = 0;
+
+    const stateCenters = cityCenters.filter(center => center.States === stateAbbr);
+
+    stateCenters.forEach(center => {
+        totalCenters += parseInt(center['Number of LINAC Centers']) || 0;
+        totalLinacs += parseInt(center['Number of LINACs']) || 0;
+    });
+
+    console.log(`Total LINAC Centers in ${stateAbbr}: ${totalCenters}`);
+    console.log(`Total LINACs in ${stateAbbr}: ${totalLinacs}`);
+
+    const metrics = {
+        walmartsOutsideRange: walmartsOutsideCount,
+        walmartsWithinRange: totalWalmarts - walmartsOutsideCount,
+        cityCentersWithinRange: totalCenters,
+        linacsWithinRange: totalLinacs,
+        totalWalmarts: totalWalmarts
+    };
+
+    console.log('\nSENDING METRICS:');
+    console.log(JSON.stringify(metrics, null, 2));
+    
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Expires', '-1');
+    res.set('Pragma', 'no-cache');
+    
+    res.json(metrics);
 });
 
 // Update the state boundary endpoint
@@ -306,38 +322,18 @@ app.get('/api/states', (req, res) => {
     res.json(states);
 });
 
-// Add more logging to the distance calculation
+// Function to calculate distance between two coordinates
 function calculateDistance(lat1, lon1, lat2, lon2) {
-    // Add input validation with detailed logging
-    if (!lat1 || !lon1 || !lat2 || !lon2) {
-        console.log('Invalid coordinates in calculateDistance:', { lat1, lon1, lat2, lon2 });
-        return Infinity;
-    }
-
-    const R = 3959; // Earth's radius in miles
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
-    
+    const R = 3958.8; // Radius of the Earth in miles
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
     const a = 
-        Math.sin(dLat/2) * Math.sin(dLat/2) +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
-        Math.sin(dLon/2) * Math.sin(dLon/2);
-    
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    const distance = R * c;
-    
-    return distance;
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * 
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
 }
 
-function toRad(degrees) {
-    return degrees * (Math.PI/180);
-}
-
-// Start server with error handling
-app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-}).on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-        console.error(`Port ${PORT} is busy. Please try a different port.`);
-    }
-});
+// Start with initial port
+tryPort(4000);

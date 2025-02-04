@@ -183,12 +183,57 @@ function initializeEventListeners() {
     const stateSelect = document.getElementById('state');
     const analyzeButton = document.getElementById('analyze');
 
-    radiusSlider.addEventListener('input', (e) => {
-        radiusValue.textContent = e.target.value;
+    radiusSlider.addEventListener('input', async (e) => {
+        const radius = e.target.value;
+        radiusValue.textContent = radius;
+        console.log(`[Frontend] Radius changed to: ${radius}`);
         
         // Update circle radius if one exists
         if (selectedLocationCircle) {
-            selectedLocationCircle.setRadius(e.target.value * 1609.34);
+            selectedLocationCircle.setRadius(radius * 1609.34);
+        }
+        
+        // Update metrics when radius changes
+        if (stateSelect.value && stateSelect.value !== 'all') {
+            const selectedState = stateSelect.value;
+            
+            try {
+                console.log(`[Frontend] Fetching metrics for state: ${selectedState}, radius: ${radius}`);
+                const response = await fetch(`/api/metrics?state=${selectedState}&radius=${radius}`);
+                const metrics = await response.json();
+                console.log('[Frontend] Received metrics:', metrics);
+                
+                // Update the metrics display if modal is open
+                if (!document.getElementById('dashboard-modal').classList.contains('d-none')) {
+                    const metricsHTML = `
+                        <div class="metric-card">
+                            <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
+                            <div class="metric-label">Walmarts Not Within ${radius} Miles of LINAC</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">${metrics.totalWalmarts || 0}</div>
+                            <div class="metric-label">Total Walmarts in State</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">${metrics.cityCentersWithinRange || 0}</div>
+                            <div class="metric-label">LINAC Centers in State</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value">${metrics.linacsWithinRange || 0}</div>
+                            <div class="metric-label">Total LINACs in State</div>
+                        </div>
+                    `;
+                    
+                    document.getElementById('modal-dashboard-metrics').innerHTML = metricsHTML;
+                }
+                
+                // If table view is active, update it as well
+                if (document.getElementById('metrics-table-body')) {
+                    createMetricsTable();
+                }
+            } catch (error) {
+                console.error('Error updating metrics:', error);
+            }
         }
     });
 
@@ -206,6 +251,7 @@ function initializeEventListeners() {
     // Update dashboard button click handler
     document.getElementById('dashboard-button').addEventListener('click', async () => {
         const selectedState = document.getElementById('state').value;
+        const radius = document.getElementById('radius').value;
         const dashboardTitle = document.getElementById('dashboard-title');
         
         // Update title with selected state
@@ -230,16 +276,16 @@ function initializeEventListeners() {
 
         // Fetch and display metrics for the current state
         try {
-            const response = await fetch(`/api/metrics?state=${selectedState}`);
+            const response = await fetch(`/api/metrics?state=${selectedState}&radius=${radius}`);
             const metrics = await response.json();
             
             const metricsHTML = `
                 <div class="metric-card">
                     <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
-                    <div class="metric-label">Walmarts Not Within 35 Miles of LINAC</div>
+                    <div class="metric-label">Walmarts Not Within ${radius} Miles of LINAC</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-value">${metrics.walmartsWithinRange || 0}</div>
+                    <div class="metric-value">${metrics.totalWalmarts || 0}</div>
                     <div class="metric-label">Total Walmarts in State</div>
                 </div>
                 <div class="metric-card">
@@ -358,7 +404,7 @@ function calculateZoomLevel(radiusInMeters) {
     return 10;                                 // < 10 miles
 }
 
-// Update displayMetrics function to only handle modal metrics
+// Update displayMetrics function to include the radius in the label
 function displayMetrics(metrics) {
     // Don't do anything if we're in table view
     const tableViewActive = document.getElementById('metrics-table-body') !== null;
@@ -373,13 +419,14 @@ function displayMetrics(metrics) {
     }
     
     if (metrics) {
+        const radius = document.getElementById('radius').value;
         const metricsHTML = `
             <div class="metric-card">
                 <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
-                <div class="metric-label">Walmarts Not Within 35 Miles of LINAC</div>
+                <div class="metric-label">Walmarts Not Within ${radius} Miles of LINAC</div>
             </div>
             <div class="metric-card">
-                <div class="metric-value">${metrics.walmartsWithinRange || 0}</div>
+                <div class="metric-value">${metrics.totalWalmarts || 0}</div>
                 <div class="metric-label">Total Walmarts in State</div>
             </div>
             <div class="metric-card">
@@ -420,12 +467,11 @@ async function populateCityDropdown() {
 async function updateDashboardMetrics() {
     try {
         const radius = document.getElementById('radius').value;
-        const city = document.getElementById('city').value;
+        const state = document.getElementById('state').value;
         
-        const response = await fetch(`/api/metrics?radius=${radius}&city=${city}`);
+        const response = await fetch(`/api/metrics?state=${state}&radius=${radius}`);
         const metrics = await response.json();
         
-        // Update metrics display (will implement later)
         displayMetrics(metrics);
     } catch (error) {
         console.error('Error updating metrics:', error);
@@ -528,7 +574,24 @@ async function loadStateBoundary(state) {
         }).addTo(map);
 
         console.log('[Frontend] Fitting map to state bounds');
-        map.fitBounds(stateLayer.getBounds());
+        
+        // Special handling for Alaska
+        if (state === 'AK') {
+            // Custom bounds for Alaska that exclude far western Aleutian Islands
+            const akBounds = L.latLngBounds(
+                L.latLng(51.214183, -179.148909), // Southwest corner
+                L.latLng(71.365162, -130.001476)  // Northeast corner
+            );
+            map.fitBounds(akBounds, {
+                padding: [50, 50],
+                maxZoom: 5  // Limit max zoom for Alaska
+            });
+        } else {
+            // Normal handling for other states
+            map.fitBounds(stateLayer.getBounds(), {
+                padding: [50, 50]
+            });
+        }
         
         return true; // Return true to indicate success
     } catch (error) {
@@ -599,7 +662,8 @@ async function updateAnalysis() {
             }
 
             // Get nationwide metrics from server
-            const metricsResponse = await fetch('/api/metrics?state=US');
+            const radius = document.getElementById('radius').value;
+            const metricsResponse = await fetch(`/api/metrics?state=US&radius=${radius}`);
             const metrics = await metricsResponse.json();
 
             displayMetrics(metrics);
@@ -611,27 +675,13 @@ async function updateAnalysis() {
                 throw new Error('Failed to load state boundary');
             }
 
-            // Show only markers within state bounds using point-in-polygon check
-            walmartMarkers.forEach(marker => {
-                const isInState = stateLayer.getBounds().contains(marker.getLatLng()) &&
-                                isPointInPolygon(marker.getLatLng(), stateLayer);
-                marker.setOpacity(isInState ? 1 : 0);
-                if (!isInState) {
-                    marker.closePopup();
-                }
-            });
-
-            linacMarkers.forEach(marker => {
-                const isInState = stateLayer.getBounds().contains(marker.getLatLng()) &&
-                                isPointInPolygon(marker.getLatLng(), stateLayer);
-                marker.setOpacity(isInState ? 1 : 0);
-                if (!isInState) {
-                    marker.closePopup();
-                }
-            });
+            // Show all markers, regardless of state boundaries
+            walmartMarkers.forEach(marker => marker.setOpacity(1));
+            linacMarkers.forEach(marker => marker.setOpacity(1));
 
             // Get state metrics from server
-            const response = await fetch(`/api/metrics?state=${state}`);
+            const radius = document.getElementById('radius').value;
+            const response = await fetch(`/api/metrics?state=${state}&radius=${radius}`);
             const metrics = await response.json();
 
             displayMetrics(metrics);
@@ -719,29 +769,26 @@ function updateLocationList() {
                         map.removeLayer(selectedLocationCircle);
                     }
                     
-                    // Create new circle
-                    selectedLocationCircle = L.circle(location, {
-                        radius: radius * 1609.34, // Convert miles to meters
-                        color: 'red',
-                        fillColor: '#f03',
-                        fillOpacity: 0.1
-                    }).addTo(map);
-                    
                     // Calculate appropriate zoom level based on radius
                     const zoomLevel = calculateZoomLevel(radius * 1609.34);
                     
-                    // Get the sidebar width
-                    const sidebarWidth = document.querySelector('.col-md-3').getBoundingClientRect().width;
+                    // Create new circle with blue color for Walmart
+                    selectedLocationCircle = L.circle(location, {
+                        radius: radius * 1609.34, // Convert miles to meters
+                        color: '#0d6efd', // Bootstrap primary blue
+                        fillColor: '#0d6efd',
+                        fillOpacity: 0.1
+                    }).addTo(map);
                     
-                    // Calculate the center point with offset
-                    const targetLatLng = map.layerPointToLatLng(
-                        map.latLngToLayerPoint(location).add([sidebarWidth/2, 0])
-                    );
+                    // Create a bounds object centered on the location
+                    const bounds = selectedLocationCircle.getBounds();
                     
-                    // Set the view to the offset center
-                    map.setView(targetLatLng, zoomLevel, {
+                    // Fit the map to these bounds and force the zoom level
+                    map.fitBounds(bounds, {
                         animate: true,
-                        duration: 0.3
+                        duration: 0.3,
+                        maxZoom: zoomLevel,
+                        padding: [50, 50] // Add some padding around the circle
                     });
                     
                     marker.openPopup();
@@ -773,29 +820,26 @@ function updateLocationList() {
                     // Calculate appropriate zoom level based on radius
                     const zoomLevel = calculateZoomLevel(radius * 1609.34);
                     
-                    // First zoom out
-                    map.setZoom(5, {
+                    // Create new circle with blue color for Walmart
+                    selectedLocationCircle = L.circle(location, {
+                        radius: radius * 1609.34, // Convert miles to meters
+                        color: 'red',
+                        fillColor: '#f03',
+                        fillOpacity: 0.1
+                    }).addTo(map);
+                    
+                    // Create a bounds object centered on the location
+                    const bounds = selectedLocationCircle.getBounds();
+                    
+                    // Fit the map to these bounds and force the zoom level
+                    map.fitBounds(bounds, {
                         animate: true,
-                        duration: 0.5
+                        duration: 0.3,
+                        maxZoom: zoomLevel,
+                        padding: [50, 50] // Add some padding around the circle
                     });
                     
-                    // Then after a delay, zoom into the new location
-                    setTimeout(() => {
-                        map.setView(location, zoomLevel, {
-                            animate: true,
-                            duration: 0.5
-                        });
-                        
-                        // Create new circle after zooming in
-                        selectedLocationCircle = L.circle(location, {
-                            radius: radius * 1609.34, // Convert miles to meters
-                            color: 'red',
-                            fillColor: '#f03',
-                            fillOpacity: 0.1
-                        }).addTo(map);
-                        
-                        marker.openPopup();
-                    }, 600); // Wait for zoom out animation to complete
+                    marker.openPopup();
                 });
                 
                 listContainer.appendChild(div);
@@ -836,25 +880,12 @@ document.addEventListener('DOMContentLoaded', initializeApp);
 
 // Update hideWalmartsNearLinac to use point-in-polygon check
 function hideWalmartsNearLinac() {
-    if (!stateLayer) return;
-
-    // Get Walmarts that are actually within the state polygon
-    const walmartInState = walmartMarkers.filter(marker => 
-        stateLayer.getBounds().contains(marker.getLatLng()) &&
-        isPointInPolygon(marker.getLatLng(), stateLayer)
-    );
-
-    const linacInState = linacMarkers.filter(marker => 
-        stateLayer.getBounds().contains(marker.getLatLng()) &&
-        isPointInPolygon(marker.getLatLng(), stateLayer)
-    );
-
-    walmartInState.forEach(walmartMarker => {
-        // Get the current radius value from the input
-        const radiusValue = parseFloat(document.getElementById('radius').value);
-        
+    // Get the current radius value from the input
+    const radiusValue = parseFloat(document.getElementById('radius').value);
+    
+    walmartMarkers.forEach(walmartMarker => {
         // Check if this Walmart is within the specified radius of any LINAC
-        const isNearLinac = linacInState.some(linacMarker => {
+        const isNearLinac = linacMarkers.some(linacMarker => {
             const distance = walmartMarker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
             return distance <= radiusValue;
         });
@@ -869,61 +900,50 @@ function hideWalmartsNearLinac() {
     updateLocationList();
 }
 
-// Update showAllWalmarts to use point-in-polygon check
+// Update showAllWalmarts to show all markers
 function showAllWalmarts() {
-    if (!stateLayer) return;
-
-    // Show only Walmarts that are actually within the state polygon
+    // Show all Walmart markers
     walmartMarkers.forEach(marker => {
-        const isInState = stateLayer.getBounds().contains(marker.getLatLng()) &&
-                         isPointInPolygon(marker.getLatLng(), stateLayer);
-        marker.setOpacity(isInState ? 1 : 0);
-        if (!isInState) {
-            marker.closePopup();
-        }
+        marker.setOpacity(1);
     });
 
     // Update the location list to show all markers again
     updateLocationList();
 }
 
-// Update createMetricsTable function
+// Update createMetricsTable function to include the radius in the header
 function createMetricsTable() {
-    // Get all states and sort them
-    const states = Array.from(document.getElementById('state').options)
-        .map(option => ({ value: option.value, text: option.text }))
-        .filter(option => option.value !== 'all' && option.value !== 'US')
-        .sort((a, b) => a.text.localeCompare(b.text));
-    
-    // Create table HTML
+    const radius = document.getElementById('radius').value;
     let tableHTML = `
-        <table class="table table-striped table-hover">
-            <thead class="table-light">
-                <tr>
-                    <th>State</th>
-                    <th class="text-end">Walmarts Not Within<br>35 Miles of LINAC</th>
-                    <th class="text-end">Total Walmarts<br>in State</th>
-                    <th class="text-end">LINAC Centers<br>in State</th>
-                    <th class="text-end">Total LINACs<br>in State</th>
-                </tr>
-            </thead>
-            <tbody id="metrics-table-body">
-                <tr>
-                    <td colspan="5" class="text-center">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
+        <div class="metrics-table-container">
+            <table class="metrics-table">
+                <thead class="metrics-table-header">
+                    <tr>
+                        <th></th>
+                        <th class="text-end">Not Within<br>${radius} Miles</th>
+                        <th class="text-end">Total<br>Walmarts</th>
+                        <th class="text-end">LINAC<br>Centers</th>
+                        <th class="text-end">Total<br>LINACs</th>
+                    </tr>
+                </thead>
+                <tbody id="metrics-table-body">
+                    <tr>
+                        <td colspan="5" class="text-center">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     `;
 
     // Update modal content
     const modalContent = document.getElementById('dashboard-modal');
     modalContent.innerHTML = `
         <div class="modal-header">
-            <h5 class="modal-title">State Metrics Table</h5>
+            <div></div>
             <button type="button" class="btn-close" id="close-modal"></button>
         </div>
         <div class="modal-body" style="max-height: 80vh; overflow-y: auto;">
@@ -938,19 +958,37 @@ function createMetricsTable() {
     });
 
     // Populate table data
-    populateTableData(states);
+    populateTableData();
 }
 
 // Update populateTableData function
-async function populateTableData(states) {
+async function populateTableData() {
     const tableBody = document.getElementById('metrics-table-body');
+    const radius = document.getElementById('radius').value;
     let tableRows = '';
+    let usTotals = {
+        walmartsOutsideRange: 0,
+        walmartsWithinRange: 0,
+        cityCentersWithinRange: 0,
+        linacsWithinRange: 0
+    };
 
-    // Process each state
+    // Process each state and accumulate US totals
+    const states = Array.from(document.getElementById('state').options)
+        .map(option => ({ value: option.value, text: option.text }))
+        .filter(option => option.value !== 'all' && option.value !== 'US')
+        .sort((a, b) => a.text.localeCompare(b.text));
+    
     for (const state of states) {
         try {
-            const response = await fetch(`/api/metrics?state=${state.value}`);
+            const response = await fetch(`/api/metrics?state=${state.value}&radius=${radius}`);
             const metrics = await response.json();
+
+            // Add to US totals
+            usTotals.walmartsOutsideRange += metrics.walmartsOutsideRange;
+            usTotals.walmartsWithinRange += metrics.walmartsWithinRange;
+            usTotals.cityCentersWithinRange += metrics.cityCentersWithinRange;
+            usTotals.linacsWithinRange += metrics.linacsWithinRange;
 
             tableRows += `
                 <tr>
@@ -972,5 +1010,16 @@ async function populateTableData(states) {
         }
     }
 
-    tableBody.innerHTML = tableRows;
+    // Add US totals row at the beginning
+    const usTotalRow = `
+        <tr class="us-total-row">
+            <td>United States</td>
+            <td class="text-end"><strong>${usTotals.walmartsOutsideRange.toLocaleString()}</strong></td>
+            <td class="text-end"><strong>${usTotals.walmartsWithinRange.toLocaleString()}</strong></td>
+            <td class="text-end"><strong>${usTotals.cityCentersWithinRange.toLocaleString()}</strong></td>
+            <td class="text-end"><strong>${usTotals.linacsWithinRange.toLocaleString()}</strong></td>
+        </tr>
+    `;
+
+    tableBody.innerHTML = usTotalRow + tableRows;
 } 

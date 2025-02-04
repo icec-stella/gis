@@ -195,7 +195,7 @@ body {
 }
 
 /* Dashboard button styles */
-#dashboard-button {
+#dashboard-button, #table-view-button {
     top: 20px;
     right: 20px;
     z-index: 1000;
@@ -206,7 +206,7 @@ body {
     color: #6c757d;
 }
 
-#dashboard-button:hover {
+#dashboard-button:hover, #table-view-button:hover {
     background-color: white;
     color: #0d6efd;
     transform: translateY(-1px);
@@ -241,11 +241,15 @@ body {
 }
 
 .modal-header {
-    padding: 20px;  /* Match the body padding */
-    border-bottom: 1px solid #dee2e6;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    padding: 1rem;
+}
+
+.btn-close {
+    padding: 1rem;
+    margin: -0.5rem -0.5rem -0.5rem auto;
 }
 
 .modal-body {
@@ -270,7 +274,7 @@ body {
     background-color: white;
     color: #6c757d;
     border: none;
-    border-radius: 8px;  /* Match the border-radius of other containers */
+    border-radius: 8px;
     padding: 12px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     width: 100%;  /* Ensure it takes full width like other containers */
@@ -287,4 +291,78 @@ body {
 .location-item:hover {
     background-color: #f8f9fa;  /* Light grey background on hover */
     transition: background-color 0.2s ease;
-} 
+}
+
+.btn#toggle-walmarts {
+    border-radius: 8px !important;
+}
+
+/* Table container styling */
+#dashboard-modal .table-responsive {
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    overflow: hidden; /* This ensures the border-radius clips the table corners */
+}
+
+/* Custom table styling */
+.metrics-table-container {
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.metrics-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.metrics-table th,
+.metrics-table td {
+    padding: 1rem;
+    border-bottom: 1px solid #dee2e6;
+}
+
+/* Header styling */
+.metrics-table .metrics-table-header {
+    background-color: #b2d2ff;
+}
+
+.metrics-table .metrics-table-header tr {
+    background-color: #b2d2ff;
+}
+
+.metrics-table .metrics-table-header tr:hover {
+    background-color: #b2d2ff;
+    cursor: default;
+}
+
+.metrics-table .metrics-table-header th {
+    color: black;
+    background-color: #b2d2ff;
+}
+
+.metrics-table .metrics-table-header th:hover {
+    background-color: #b2d2ff;
+    cursor: default;
+}
+
+.metrics-table tr:last-child td {
+    border-bottom: none;
+}
+
+/* US total row styling */
+.metrics-table tr.us-total-row {
+    background-color: #e7f1ff;
+}
+
+.metrics-table tr.us-total-row:hover {
+    background-color: #e7f1ff;
+    cursor: default;
+}
+
+/* Hover effect for regular rows only */
+.metrics-table tbody tr:not(.us-total-row):hover {
+    background-color: rgba(0, 0, 0, 0.075);
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
