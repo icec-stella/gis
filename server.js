@@ -29,7 +29,9 @@ console.log('Sample Walmart location:', walmartLocations[0]);
 
 const app = express();
 
-// Try to use the specified port
+// Start with a new port number
+const NEW_PORT = 5000; // Change this to your desired port number
+
 function tryPort(port) {
     const server = app.listen(port)
         .on('error', (err) => {
@@ -335,5 +337,5 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
-// Start with initial port
-tryPort(4000);
+// Use the new port
+tryPort(NEW_PORT);

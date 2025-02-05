@@ -10,6 +10,13 @@
     <title>Walmart-LINAC Analysis</title>
 </head>
 <body>
+    <!-- Add this right after the opening <body> tag -->
+    <div id="loading-overlay">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+
     <div class="container-fluid">
         <div class="row">
             
@@ -31,25 +38,14 @@
                 <!-- Add the new button -->
                 <button id="toggle-walmarts" class="btn btn-outline-secondary w-100 mt-3 rounded">Hide Walmarts</button>
 
-                <div id="loading-spinner" class="text-center mt-4 d-none">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <p class="text-muted mt-2">Loading...</p>
+                <div id="location-toggle-container" class="btn-group w-100 mt-3" role="group" aria-label="Location Toggle">
+                    <input type="radio" class="btn-check" name="location-toggle" id="linac-toggle" autocomplete="off" checked>
+                    <label class="btn btn-outline-secondary" for="linac-toggle">LINAC Centers</label>
+                    <input type="radio" class="btn-check" name="location-toggle" id="walmart-toggle" autocomplete="off">
+                    <label class="btn btn-outline-secondary" for="walmart-toggle">Walmarts</label>
                 </div>
                 
-                <!-- Wrap all content that should be hidden during loading in a container -->
-                <div id="analysis-content" class="d-none">
-                    <div id="location-toggle-container" class="btn-group w-100 mt-3" role="group" aria-label="Location Toggle">
-                        <input type="radio" class="btn-check" name="location-toggle" id="linac-toggle" autocomplete="off" checked>
-                        <label class="btn btn-outline-secondary" for="linac-toggle">LINAC Centers</label>
-                        
-                        <input type="radio" class="btn-check" name="location-toggle" id="walmart-toggle" autocomplete="off">
-                        <label class="btn btn-outline-secondary" for="walmart-toggle">Walmarts</label>
-                    </div>
-                    
-                    <div id="location-list" class="mt-3 location-list-container"></div>
-                </div>
+                <div id="location-list" class="mt-3 location-list-container"></div>
             </div>
             
             <!-- Map Container -->
@@ -57,7 +53,7 @@
                 <div id="map"></div>
                 <div class="map-buttons position-fixed d-flex gap-2">
                     <button id="table-view-button" class="btn btn-primary">View Table</button>
-                    <button id="dashboard-button" class="btn btn-primary">Dashboard</button>
+                    <button id="dashboard-button" class="btn btn-primary d-none">Dashboard</button>
                 </div>
             </div>
         </div>

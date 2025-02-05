@@ -23,40 +23,44 @@ const redMarkerIcon = L.icon({
 
 // Initialize the map
 async function initializeMap() {
-    map = L.map('map', {
-        preferCanvas: true, // Keep Canvas renderer
-        wheelDebounceTime: 150, // Keep wheel debounce
-        wheelPxPerZoomLevel: 120, // Keep zoom sensitivity
-        zoomSnap: 0.5, // Keep smooth zooming
-        zoomDelta: 0.5, // Keep smooth zooming
-    }).setView([39.8283, -98.5795], 4);
+    // Check if the map is already initialized
+    if (map) {
+        console.warn('Map is already initialized.');
+        return;
+    }
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
-    }).addTo(map);
-
-    // Add legend
-    const legend = L.control({ position: 'bottomleft' });
-
-    legend.onAdd = function(map) {
-        const div = L.DomUtil.create('div', 'legend');
-        div.innerHTML = `
-            <div>
-                <img src="/images/markers/marker-icon-blue.png" alt="Walmart">
-                Walmart Locations
-            </div>
-            <div>
-                <img src="/images/markers/marker-icon-red.png" alt="LINAC">
-                LINAC Centers
-            </div>
-        `;
-        return div;
-    };
-
-    legend.addTo(map);
-
-    // Load US boundary first
     try {
+        map = L.map('map', {
+            preferCanvas: true,
+            wheelDebounceTime: 150,
+            wheelPxPerZoomLevel: 120,
+            zoomSnap: 0.5,
+            zoomDelta: 0.5,
+        }).setView([39.8283, -98.5795], 4);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Add legend
+        const legend = L.control({ position: 'bottomleft' });
+        legend.onAdd = function(map) {
+            const div = L.DomUtil.create('div', 'legend');
+            div.innerHTML = `
+                <div>
+                    <img src="/images/markers/marker-icon-blue.png" alt="Walmart">
+                    Walmart Locations
+                </div>
+                <div>
+                    <img src="/images/markers/marker-icon-red.png" alt="LINAC">
+                    LINAC Centers
+                </div>
+            `;
+            return div;
+        };
+        legend.addTo(map);
+
+        // Load US boundary and wait for it to complete
         const response = await fetch('/api/state-boundary/US');
         if (!response.ok) {
             throw new Error('Failed to load US boundary');
@@ -69,12 +73,13 @@ async function initializeMap() {
                 fillOpacity: 0.05
             }
         }).addTo(map);
-    } catch (error) {
-        console.error('Error loading US boundary:', error);
-    }
 
-    // Remove cluster group initialization
-    await loadInitialMarkers();
+        // Only load markers after boundary is loaded
+        await loadInitialMarkers();
+    } catch (error) {
+        console.error('Error initializing map:', error);
+        hideLoadingOverlay(); // Ensure overlay is hidden even if there's an error
+    }
 }
 
 // Add helper function to validate coordinates
@@ -117,8 +122,18 @@ async function loadInitialMarkers() {
         
         clearMap();
         
-        // Add Walmart markers only if within US bounds
+        // Create a counter for loaded markers
+        let loadedMarkers = 0;
+        const totalMarkers = data.walmart.length + data.linac.length;
+        
+        // Add Walmart markers
         data.walmart.forEach(location => {
+            if (!location.latitude || !location.longitude) {
+                loadedMarkers++;
+                checkLoadingComplete(loadedMarkers, totalMarkers);
+                return;
+            }
+
             const latLng = L.latLng(location.latitude, location.longitude);
             
             // Only add marker if within US bounds
@@ -136,44 +151,61 @@ async function loadInitialMarkers() {
                 
                 walmartMarkers.push(marker);
             }
+            loadedMarkers++;
+            checkLoadingComplete(loadedMarkers, totalMarkers);
         });
 
-        // Add LINAC markers only if within US bounds and has valid coordinates
-        data.linac
-            .filter(location => {
-                // Check if coordinates exist and are valid numbers
-                const hasValidCoords = location.Latitude && 
-                                     location.Longitude && 
-                                     !isNaN(location.Latitude) && 
-                                     !isNaN(location.Longitude);
+        // Add LINAC markers
+        data.linac.forEach(location => {
+            if (!location.Latitude || !location.Longitude || 
+                isNaN(location.Latitude) || isNaN(location.Longitude)) {
+                loadedMarkers++;
+                checkLoadingComplete(loadedMarkers, totalMarkers);
+                return;
+            }
+
+            const latLng = L.latLng(location.Latitude, location.Longitude);
+            
+            if (isValidUSCoordinate(parseFloat(location.Latitude), parseFloat(location.Longitude)) &&
+                (!usBoundaryLayer || usBoundaryLayer.getBounds().contains(latLng))) {
+                const marker = L.marker(latLng, {
+                    icon: redMarkerIcon
+                }).addTo(map);
                 
-                // Check if coordinates are within US bounds
-                return hasValidCoords && 
-                       isValidUSCoordinate(parseFloat(location.Latitude), 
-                                         parseFloat(location.Longitude));
-            })
-            .forEach(location => {
-                const latLng = L.latLng(location.Latitude, location.Longitude);
+                marker.bindPopup(`
+                    <strong>LINAC Center</strong><br>
+                    ${location['LINAC Name']}
+                `);
                 
-                // Additional check with US boundary layer if available
-                if (!usBoundaryLayer || usBoundaryLayer.getBounds().contains(latLng)) {
-                    const marker = L.marker(latLng, {
-                        icon: redMarkerIcon
-                    }).addTo(map);
-                    
-                    marker.bindPopup(`
-                        <strong>LINAC Center</strong><br>
-                        ${location['LINAC Name']}
-                    `);
-                    
-                    linacMarkers.push(marker);
-                }
-            });
+                linacMarkers.push(marker);
+            }
+            loadedMarkers++;
+            checkLoadingComplete(loadedMarkers, totalMarkers);
+        });
 
         console.log(`Loaded ${walmartMarkers.length} Walmart markers and ${linacMarkers.length} LINAC markers within US bounds`);
     } catch (error) {
         console.error('Error loading initial markers:', error);
+        hideLoadingOverlay(); // Hide loading overlay on error
     }
+}
+
+// Update checkLoadingComplete function
+function checkLoadingComplete(loaded, total) {
+    console.log(`Loading progress: ${loaded}/${total}`);
+    if (loaded >= total) {
+        console.log('Loading complete, hiding overlay');
+        hideLoadingOverlay();
+    }
+}
+
+function hideLoadingOverlay() {
+    const overlay = document.getElementById('loading-overlay');
+    overlay.classList.add('fade-out');
+    // Remove the overlay from DOM after fade animation
+    setTimeout(() => {
+        overlay.remove();
+    }, 300);
 }
 
 // Initialize event listeners
@@ -495,17 +527,27 @@ async function updateMapData() {
 
 // Add these functions to handle loading states
 function showLoading() {
-    document.getElementById('loading-spinner').classList.remove('d-none');
-    document.getElementById('analysis-content').classList.add('d-none');
+    // Create and show the loading overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'loading-overlay';
+    overlay.innerHTML = `
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    `;
+    document.body.appendChild(overlay);
 }
 
 // Update hideLoading function to include a smooth transition
 function hideLoading() {
-    // Add a small delay to ensure all content is ready before transition
-    setTimeout(() => {
-        document.getElementById('loading-spinner').classList.add('d-none');
-        document.getElementById('analysis-content').classList.remove('d-none');
-    }, 500); // 500ms delay for smooth transition
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) {
+        overlay.classList.add('fade-out');
+        // Remove the overlay from DOM after fade animation
+        setTimeout(() => {
+            overlay.remove();
+        }, 300);
+    }
 }
 
 // Update populateStateDropdown to populateStateDropdown
@@ -516,17 +558,12 @@ async function populateStateDropdown() {
         
         const stateSelect = document.getElementById('state');
         
-        // Add United States option at the top
-        const usOption = document.createElement('option');
-        usOption.value = 'US';
-        usOption.textContent = 'United States';
-        stateSelect.insertBefore(usOption, stateSelect.firstChild);
-        
         // Add the default "Select State" option
         const defaultOption = document.createElement('option');
-        defaultOption.value = 'all';
+        defaultOption.value = '';
         defaultOption.textContent = 'Select State';
         defaultOption.disabled = true;
+        defaultOption.selected = true; // Ensure this option is selected by default
         stateSelect.insertBefore(defaultOption, stateSelect.firstChild);
         
         // Add all states
@@ -617,6 +654,9 @@ async function updateAnalysis() {
 
     try {
         showLoading();
+
+        // Show the "Dashboard" button
+        document.getElementById('dashboard-button').classList.remove('d-none');
 
         // Remove US boundary if it exists
         if (usBoundaryLayer) {
@@ -870,6 +910,7 @@ function isMarkerInCircle(marker, circle) {
 
 // Initialize the application
 async function initializeApp() {
+    // The loading overlay is already visible from the HTML
     await initializeMap();
     initializeEventListeners();
     await populateStateDropdown();
@@ -1013,7 +1054,7 @@ async function populateTableData() {
     // Add US totals row at the beginning
     const usTotalRow = `
         <tr class="us-total-row">
-            <td>United States</td>
+            <td><strong>United States</strong></td>
             <td class="text-end"><strong>${usTotals.walmartsOutsideRange.toLocaleString()}</strong></td>
             <td class="text-end"><strong>${usTotals.walmartsWithinRange.toLocaleString()}</strong></td>
             <td class="text-end"><strong>${usTotals.cityCentersWithinRange.toLocaleString()}</strong></td>
@@ -1022,4 +1063,4 @@ async function populateTableData() {
     `;
 
     tableBody.innerHTML = usTotalRow + tableRows;
-} 
+}
