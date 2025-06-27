@@ -402,3 +402,72 @@ body {
     opacity: 0;
     pointer-events: none;
 }
+
+/* Dark mode styles */
+.dark-mode body {
+    background-color: #121212;
+    color: #e0e0e0;
+}
+
+.dark-mode .controls-container,
+.dark-mode .metric-card,
+.dark-mode .legend,
+.dark-mode .location-list-container,
+.dark-mode #location-toggle-container,
+.dark-mode #loading-spinner,
+.dark-mode .custom-modal,
+.dark-mode #toggle-walmarts,
+.dark-mode .metrics-table-container {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.dark-mode .metric-value {
+    color: #bb86fc;
+}
+
+.dark-mode .metric-label {
+    color: #b0b0b0;
+}
+
+.dark-mode .btn-outline-secondary {
+    color: #b0b0b0;
+    background-color: #1e1e1e;
+}
+
+.dark-mode .btn-outline-secondary:hover,
+.dark-mode .btn-check:checked + .btn-outline-secondary {
+    color: #121212;
+    background-color: #bb86fc;
+}
+
+.dark-mode .location-item:hover {
+    background-color: #2a2a2a;
+}
+
+.dark-mode .metrics-table th,
+.dark-mode .metrics-table td {
+    border-bottom: 1px solid #333;
+}
+
+.dark-mode .metrics-table .metrics-table-header {
+    background-color: #333;
+}
+
+.dark-mode .metrics-table tr.us-total-row {
+    background-color: #2a2a2a;
+}
+
+.dark-mode .metrics-table tbody tr:not(.us-total-row):hover {
+    background-color: rgba(255, 255, 255, 0.075);
+}
+
+.dark-mode .selected-state-row {
+    background-color: #333;
+    color: #e0e0e0;
+}
+
+.dark-mode #loading-overlay {
+    background-color: rgba(18, 18, 18, 0.9);
+}

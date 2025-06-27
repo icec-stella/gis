@@ -1,36 +1,18 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const NodeCache = require('node-cache');
 const fetch = require('node-fetch');
 const https = require('https');
 const axios = require('axios');
+const fs = require('fs');
 
-// Load the JSON data
-const walmartLocations = require('./src/data/walmart-locations.json');
-const cityCenters = require('./src/data/city-centers.json');
-const linacLocations = require('./src/data/linac-locations.json');
-
-// Add detailed startup logging
-console.log('\n=== SERVER STARTUP ===');
-console.log(`Total Walmart locations loaded: ${walmartLocations.length}`);
-console.log('Walmart locations by state:');
-const stateCount = {};
-walmartLocations.forEach(w => {
-    stateCount[w.state] = (stateCount[w.state] || 0) + 1;
-});
-Object.entries(stateCount).sort().forEach(([state, count]) => {
-    console.log(`${state}: ${count} locations`);
-});
-
-console.log('Loaded data:');
-console.log(`Total Walmart locations: ${walmartLocations.length}`);
-console.log('Sample Walmart location:', walmartLocations[0]);
+// Minimal startup logging
+console.log('\n=== LINAC Analysis Server ===');
 
 const app = express();
 
 // Start with a new port number
-const NEW_PORT = 5000; // Change this to your desired port number
+const NEW_PORT = 5025;
 
 function tryPort(port) {
     const server = app.listen(port)
@@ -58,8 +40,16 @@ app.use((req, res, next) => {
     next();
 });
 
-// Reduce the cache TTL
-const cache = new NodeCache({ stdTTL: 60 }); // Cache for 1 minute instead of 10
+// Helper function to load data fresh from files
+function loadDataFromFile(filePath) {
+    try {
+        const data = fs.readFileSync(filePath, 'utf8');
+        return JSON.parse(data);
+    } catch (error) {
+        console.error(`Error loading data from ${filePath}:`, error);
+        return [];
+    }
+}
 
 // Add state abbreviation mapping
 const stateMapping = {
@@ -131,23 +121,23 @@ app.get('/', (req, res) => {
 
 // API Routes
 app.get('/api/cities', (req, res) => {
+    const cityCenters = loadDataFromFile('./src/data/city-centers.json');
     const cities = [...new Set(cityCenters.map(location => location.Cities))].sort();
     res.json(cities);
 });
 
 app.get('/api/map-data', (req, res) => {
-    const cacheKey = `map-data-${req.query.city}-${req.query.radius}-${req.query.initial}`;
-    const cachedData = cache.get(cacheKey);
+    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
+    const cityCenters = loadDataFromFile('./src/data/city-centers.json');
+    const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
     
-    if (cachedData) {
-        return res.json(cachedData);
-    }
+    console.log(`[Server] Loading fresh data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs`);
+    console.log(`[Server] First LINAC entry: ${JSON.stringify(linacLocations[0]).substring(0, 200)}`);
+    console.log(`[Server] Last LINAC entry: ${JSON.stringify(linacLocations[linacLocations.length-1]).substring(0, 200)}`);
     
     const radius = parseFloat(req.query.radius) || 35;
     const city = req.query.city;
     const isInitialLoad = req.query.initial === 'true';
-
-    console.log('Map data request:', { radius, city, isInitialLoad });
 
     // Always send all Walmart locations
     let filteredWalmarts = walmartLocations;
@@ -155,15 +145,12 @@ app.get('/api/map-data', (req, res) => {
     // Filter city centers and LINAC locations based on city
     let filteredCityCenters = cityCenters;
     let filteredLinacs = linacLocations.filter(location => 
-        location.Latitude && location.Longitude // Only include locations with valid coordinates
+        location.Latitude && location.Longitude
     );
 
     if (!isInitialLoad && city && city !== 'all') {
         filteredCityCenters = cityCenters.filter(location => location.Cities === city);
     }
-
-    const validLinacs = linacLocations.filter(location => location.Latitude && location.Longitude);
-    console.log(`Total valid LINAC locations: ${validLinacs.length}`);
 
     const result = {
         walmart: filteredWalmarts,
@@ -171,37 +158,35 @@ app.get('/api/map-data', (req, res) => {
         linac: filteredLinacs
     };
     
-    cache.set(cacheKey, result);
     res.json(result);
 });
 
 app.get('/api/metrics', async (req, res) => {
+    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
+    const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
+    
+    console.log(`[Server] Metrics API - Loading data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs`);
+    
     const stateAbbr = req.query.state;
     const radius = parseFloat(req.query.radius) || 35;
-
-    // Use walmartLocations for Walmart map pins
     const stateWalmarts = walmartLocations.filter(w => w.state === stateAbbr);
-
-    // Use all LINAC locations with valid coordinates
-    const validLinacs = linacLocations.filter(linac => 
-        linac.Latitude && 
-        linac.Longitude
-    );
-
-    console.log(`Found ${validLinacs.length} valid LINAC locations nationwide`);
-
+    const validLinacs = linacLocations.filter(linac => linac.Latitude && linac.Longitude);
+    
+    console.log(`[Server] Calculating metrics for state ${stateAbbr} with radius ${radius} miles`);
+    console.log(`[Server] State has ${stateWalmarts.length} Walmart locations and there are ${validLinacs.length} valid LINAC centers`);
+    
     let walmartsOutsideCount = 0;
+    let walmartsWithinCount = 0;
+    let walmartsInvalidCount = 0;
 
     for (const walmart of stateWalmarts) {
         if (!walmart.latitude || !walmart.longitude) {
-            console.log(`Skipping Walmart (${walmart.name}) due to missing coordinates`);
             walmartsOutsideCount++;
+            walmartsInvalidCount++;
             continue;
         }
 
         let isWithinRange = false;
-        let shortestDistance = Infinity;
-
         for (const linac of validLinacs) {
             const distance = calculateDistance(
                 parseFloat(walmart.latitude),
@@ -210,132 +195,154 @@ app.get('/api/metrics', async (req, res) => {
                 parseFloat(linac.Longitude)
             );
 
-            if (distance < shortestDistance) {
-                shortestDistance = distance;
-            }
-
             if (distance <= radius) {
                 isWithinRange = true;
                 break;
             }
         }
 
-        console.log(`Walmart (${walmart.name}) shortest distance to any LINAC: ${shortestDistance} miles`);
-
         if (!isWithinRange) {
-            console.log(`Walmart (${walmart.name}) is outside the ${radius} mile radius of any LINAC`);
             walmartsOutsideCount++;
+        } else {
+            walmartsWithinCount++;
         }
     }
 
-    console.log(`Total Walmarts outside ${radius} mile radius: ${walmartsOutsideCount}`);
-
     const totalWalmarts = stateWalmarts.length;
-
-    // Calculate LINAC Centers and Total LINACs in the state
-    let totalCenters = 0;
+    const stateLinacs = linacLocations.filter(center => center.States === stateAbbr);
+    const totalCenters = stateLinacs.length; // Each object represents one center
     let totalLinacs = 0;
-
-    const stateCenters = cityCenters.filter(center => center.States === stateAbbr);
-
-    stateCenters.forEach(center => {
-        totalCenters += parseInt(center['Number of LINAC Centers']) || 0;
+    stateLinacs.forEach(center => {
         totalLinacs += parseInt(center['Number of LINACs']) || 0;
     });
+    
+    console.log(`[Server] Metrics results: ${walmartsOutsideCount} Walmarts outside range, ${walmartsWithinCount} within range, ${walmartsInvalidCount} invalid coordinates`);
+    console.log(`[Server] State ${stateAbbr} has ${totalCenters} LINAC centers with ${totalLinacs} total LINACs`);
 
-    console.log(`Total LINAC Centers in ${stateAbbr}: ${totalCenters}`);
-    console.log(`Total LINACs in ${stateAbbr}: ${totalLinacs}`);
-
-    const metrics = {
+    res.json({
         walmartsOutsideRange: walmartsOutsideCount,
-        walmartsWithinRange: totalWalmarts - walmartsOutsideCount,
-        cityCentersWithinRange: totalCenters,
-        linacsWithinRange: totalLinacs,
-        totalWalmarts: totalWalmarts
-    };
-
-    console.log('\nSENDING METRICS:');
-    console.log(JSON.stringify(metrics, null, 2));
-    
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    res.set('Expires', '-1');
-    res.set('Pragma', 'no-cache');
-    
-    res.json(metrics);
+        totalWalmarts: totalWalmarts,
+        cityCentersWithinRange: totalCenters, // This is a legacy field name
+        linacsWithinRange: totalLinacs
+    });
 });
 
-// Update the state boundary endpoint
+app.get('/api/states', (req, res) => {
+    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
+    
+    // Get unique states from Walmart data
+    const statesFromData = [...new Set(walmartLocations.map(location => location.state))];
+    
+    // Sort states alphabetically
+    const sortedStates = statesFromData.sort();
+    
+    // Return the sorted list of states
+    res.json(sortedStates);
+});
+
 app.get('/api/state-boundary/:state', async (req, res) => {
-    console.log('[Backend] Received request for state boundary');
-    console.log('[Backend] Request params:', req.params);
+    // Dynamic data loading
+    const state = req.params.state;
+    let stateName = stateMapping[state] || state;
     
     try {
-        const fullStateName = stateMapping[req.params.state] || req.params.state;
-        console.log(`[Backend] Using full state name: ${fullStateName}`);
-
-        const stateQuery = `${fullStateName}, United States`;
-        // For US boundary, we want admin_level=2 to get the country boundary
-        const nominatimUrl = req.params.state === 'US' 
-            ? `https://nominatim.openstreetmap.org/search?q=United States&format=json&polygon_geojson=1&countrycodes=us&featuretype=country`
-            : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(stateQuery)}&format=json&polygon_geojson=1&countrycodes=us`;
+        // Special case for US
+        if (state === 'US') {
+            stateName = 'United States';
+            const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=United States&format=json&polygon_geojson=1&countrycodes=us&featuretype=country`;
+            
+            const response = await axios.get(nominatimUrl, {
+                headers: {
+                    'User-Agent': 'LINAC-App/1.0',
+                    'Accept': 'application/json'
+                }
+            });
+            
+            const nominatimData = response.data;
+            
+            if (!nominatimData || nominatimData.length === 0) {
+                return res.status(404).json({ error: 'US Boundary not found' });
+            }
+            
+            const boundaryData = nominatimData.find(item => 
+                item.class === 'boundary' && 
+                item.type === 'administrative' && 
+                item.geojson
+            );
+            
+            if (!boundaryData || !boundaryData.geojson) {
+                return res.status(404).json({ error: 'US Boundary not found' });
+            }
+            
+            return res.json([{ geojson: boundaryData.geojson }]);
+        }
         
-        console.log(`[Backend] Making request to Nominatim URL: ${nominatimUrl}`);
-
+        // For individual states, use Nominatim instead of Overpass for more reliable results
+        const fullStateName = stateName;
+        const stateQuery = `${fullStateName}, United States`;
+        const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(stateQuery)}&format=json&polygon_geojson=1&countrycodes=us`;
+        
+        console.log(`[Server] Fetching boundary for state: ${state} (${fullStateName})`);
+        
         const response = await axios.get(nominatimUrl, {
             headers: {
                 'User-Agent': 'LINAC-App/1.0',
                 'Accept': 'application/json'
             }
         });
-
+        
         const nominatimData = response.data;
         
         if (!nominatimData || nominatimData.length === 0) {
-            console.log('[Backend] No results from Nominatim');
+            console.error(`[Server] No boundary found for state: ${state}`);
             return res.status(404).json({ error: 'Boundary not found' });
         }
-
-        // Find the appropriate boundary
-        const boundaryData = req.params.state === 'US'
-            ? nominatimData.find(item => item.class === 'boundary' && item.type === 'administrative' && item.geojson)
-            : nominatimData.find(item => 
-                item.osm_type === 'relation' && 
-                item.class === 'boundary' && 
-                item.type === 'administrative' &&
-                item.geojson
-            );
-
+        
+        // Find the administrative boundary for the state
+        const boundaryData = nominatimData.find(item => 
+            item.class === 'boundary' && 
+            item.type === 'administrative' &&
+            item.geojson
+        );
+        
         if (!boundaryData || !boundaryData.geojson) {
-            console.log('[Backend] No matching boundary found');
+            console.error(`[Server] No valid boundary data found for state: ${state}`);
             return res.status(404).json({ error: 'Boundary not found' });
         }
-
-        res.json([{ geojson: boundaryData.geojson }]);
+        
+        return res.json([{ geojson: boundaryData.geojson }]);
     } catch (error) {
-        console.error('[Backend] Error fetching boundary:', error);
-        res.status(500).json({ error: 'Failed to fetch boundary' });
+        console.error('Error fetching state boundary:', error);
+        res.status(500).json({ error: 'Failed to fetch state boundary' });
     }
 });
 
-// Add this new endpoint for states
-app.get('/api/states', (req, res) => {
-    // Get unique states from Walmart locations
-    const states = [...new Set(walmartLocations.map(location => location.state))].sort();
-    res.json(states);
-});
+// Start the server
+tryPort(NEW_PORT);
 
-// Function to calculate distance between two coordinates
+// Helper function for distance calculation
 function calculateDistance(lat1, lon1, lat2, lon2) {
-    const R = 3958.8; // Radius of the Earth in miles
-    const dLat = (lat2 - lat1) * (Math.PI / 180);
-    const dLon = (lon2 - lon1) * (Math.PI / 180);
-    const a = 
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * 
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    if (!lat1 || !lon1 || !lat2 || !lon2) {
+        return Number.MAX_VALUE;
+    }
+    
+    // Convert latitude and longitude from degrees to radians
+    const radLat1 = (Math.PI * lat1) / 180;
+    const radLon1 = (Math.PI * lon1) / 180;
+    const radLat2 = (Math.PI * lat2) / 180;
+    const radLon2 = (Math.PI * lon2) / 180;
+    
+    // Haversine formula
+    const dLat = radLat2 - radLat1;
+    const dLon = radLon2 - radLon1;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(radLat1) * Math.cos(radLat2) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    
+    // Radius of the Earth in miles
+    const R = 3958.8; // miles
+    
+    // Calculate the distance
     return R * c;
 }
-
-// Use the new port
-tryPort(NEW_PORT);
