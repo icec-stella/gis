@@ -72,10 +72,15 @@ npm run dev
 ## How to Use
 
 1.  **Select a State**: Use the dropdown menu on the left to select a state you want to analyze. The map will zoom to that state and display its boundary.
+   
 2.  **Set the Radius**: Use the slider to set the desired radius in miles for the analysis.
+   
 3.  **Run Analysis**: Click the "Run Analysis" button to see the results. Walmarts within the specified radius of a LINAC facility will be highlighted.
+
 4.  **View Metrics**: Click the "Dashboard" button to see a summary of the metrics for the selected state.
+
 5.  **Toggle Views**: Use the "Hide Walmarts" and "Show All Walmarts" buttons to hide the Walmart pins that are not within the specified "Radius". The remaining Walmart pins represent all of the Walmart locations that are not within the specified radius of the nearest LINAC Centers. 
+
 6.  **Download Data**: From the table view, you can download the raw data for your analysis in CSV or JSON format.
 
 ## Data Sources
