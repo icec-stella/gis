@@ -1,6 +1,6 @@
 # Walmart-LINAC Analysis Tool
 
-This is a web-based mapping tool to analyze the proximity of Walmart stores to LINAC (Linear Accelerator) facilities across the United States. It provides an interactive map to visualize the locations and offers analytical tools to determine coverage.
+This is a web-based mapping tool that analyzes the proximity of Walmart stores to LINAC Centers across the United States. It provides an interactive map to visualize the locations and offers analytical tools to determine coverage and gaps.
 
 ## Features
 
