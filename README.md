@@ -22,15 +22,25 @@ This is a web-based mapping tool that analyzes the proximity of Walmart stores t
 
 ### Prerequisites
 
--   [Node.js](https://nodejs.org/en/download/) (which includes npm) must be installed on your system.
+-   **Node.js**: You'll need Node.js to run the server. If you don't have it, you can [download it here](https://nodejs.org/en/download/).
+-   **A Code Editor**: We recommend using a modern code editor like [Cursor](https://cursor.sh/) or [VS Code](https://code.visualstudio.com/) for a better experience.
 
 ### Installation
 
+Before you begin, please ensure you have completed the steps in the **Prerequisites** section above.
+
 1.  **Clone the repository:**
 
+    One way to get the code is by using your code editor to clone the repository. In Cursor or VS Code, open the Command Palette (`Ctrl+Shift+P` or `Cmd+Shift+P`) and type `Git: Clone`. Paste the following URL when prompted:
+    
+    ```
+    https://github.com/icec-stella/gis.git
+    ```
+
+    Alternatively, you can use the terminal or command prompt:
     ```bash
-    git clone https://github.com/your-username/your-repo-name.git
-    cd your-repo-name
+    git clone https://github.com/icec-stella/gis.git
+    cd gis
     ```
 
 2.  **Install dependencies:**
@@ -55,7 +65,7 @@ This is a web-based mapping tool that analyzes the proximity of Walmart stores t
 
 2.  **Access the application:**
 
-    Open your web browser and navigate to:
+    Open your web browser, such as Google Chrome or Microsoft Edge, and navigate to:
 
     ```
     http://localhost:5025
@@ -63,7 +73,7 @@ This is a web-based mapping tool that analyzes the proximity of Walmart stores t
 
 ### Development
 
-For development, you can run the server with `nodemon`, which will automatically restart the server when file changes are detected.
+If you plan on making changes to the code, we recommend running the server with `nodemon`. This will automatically restart the server whenever a file is saved, so you don't have to do it manually.
 
 ```bash
 npm run dev
