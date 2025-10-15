@@ -1597,7 +1597,7 @@ function getLegendHTML() {
         return `
             <div>
                 <img src="/images/markers/marker-icon-blue.png" alt="Walmart">
-                Walmarts > ${radius} miles away from a LINAC Center
+                Linac gaps<sup style="left: -7px;">a</sup>
             </div>
             <div>
                 <img src="/images/markers/marker-icon-red.png" alt="LINAC">
