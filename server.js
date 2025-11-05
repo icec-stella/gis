@@ -11,25 +11,20 @@ console.log('\n=== LINAC Analysis Server ===');
 
 const app = express();
 
-// Start with a new port number
-const NEW_PORT = 5025;
-
-function tryPort(port) {
-    const server = app.listen(port)
-        .on('error', (err) => {
-            if (err.code === 'EADDRINUSE') {
-                console.error(`Port ${port} is already in use. Please free up the port or use a different one.`);
-                process.exit(1);
-            }
-        })
-        .on('listening', () => {
-            console.log(`Server running at http://localhost:${port}`);
-        });
-}
+// Use PORT from environment variable (Render sets this) or default to 5025 for local development
+const PORT = process.env.PORT || 5025;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Allow iframe embedding (required for embedding on external websites)
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'ALLOWALL');
+  res.setHeader('Content-Security-Policy', 'frame-ancestors *');
+  next();
+});
+
 app.use(express.static('public'));
 
 // Add stronger cache control headers for all responses
@@ -116,7 +111,7 @@ const reverseStateMapping = Object.entries(stateMapping).reduce((acc, [abbr, ful
 
 // Basic route
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, '../public/index.html'));
+    res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
 // API Routes
@@ -318,7 +313,12 @@ app.get('/api/state-boundary/:state', async (req, res) => {
 });
 
 // Start the server
-tryPort(NEW_PORT);
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    if (process.env.PORT) {
+        console.log(`Ready for iframe embedding on Render`);
+    }
+});
 
 // Helper function for distance calculation
 function calculateDistance(lat1, lon1, lat2, lon2) {
