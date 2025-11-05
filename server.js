@@ -5,6 +5,7 @@ const fetch = require('node-fetch');
 const https = require('https');
 const axios = require('axios');
 const fs = require('fs');
+const rateLimit = require('express-rate-limit');
 
 // Minimal startup logging
 console.log('\n=== LINAC Analysis Server ===');
@@ -18,10 +19,42 @@ const PORT = process.env.PORT || 5025;
 app.use(cors());
 app.use(express.json());
 
-// Allow iframe embedding (required for embedding on external websites)
+// Rate limiting to prevent abuse
+const limiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100, // limit each IP to 100 requests per minute
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  message: 'Too many requests from this IP, please try again later.'
+});
+
+// Apply rate limiting to all requests
+app.use(limiter);
+
+// Enhanced security headers with Content Security Policy
 app.use((req, res, next) => {
-  res.setHeader('X-Frame-Options', 'ALLOWALL');
-  res.setHeader('Content-Security-Policy', 'frame-ancestors *');
+  // Get allowed iframe domains from environment variable, default to icecancer.org
+  // Set ALLOWED_IFRAME_DOMAINS in Render dashboard to override (e.g., "https://icecancer.org https://*.icecancer.org https://otherdomain.org")
+  const allowedIframeDomains = process.env.ALLOWED_IFRAME_DOMAINS || 'https://icecancer.org https://*.icecancer.org';
+  
+  // Build Content Security Policy
+  const cspDirectives = [
+    "default-src 'self'",
+    "img-src 'self' data: https://*.tile.openstreetmap.org https://tile.openstreetmap.org",
+    "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com",
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com",
+    "font-src 'self' https://cdn.jsdelivr.net https://unpkg.com",
+    "connect-src 'self' https://nominatim.openstreetmap.org",
+    `frame-ancestors ${allowedIframeDomains}`
+  ];
+  
+  res.setHeader('Content-Security-Policy', cspDirectives.join('; '));
+  
+  // Additional security headers
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // X-Frame-Options is set to DENY when we have specific domains (CSP frame-ancestors handles the whitelist)
+  res.setHeader('X-Frame-Options', 'DENY');
+  
   next();
 });
 

@@ -79,6 +79,20 @@ If you plan on making changes to the code, we recommend running the server with 
 npm run dev
 ```
 
+## Security
+
+This application includes several security features to protect against abuse and ensure safe operation:
+
+- **Content Security Policy (CSP)**: Restricts resource loading to trusted sources, preventing XSS attacks and unauthorized resource access
+- **Rate Limiting**: Limits requests to 100 per minute per IP address to prevent abuse and DDoS attacks
+- **Iframe Domain Restrictions**: By default, the application can only be embedded in iframes on `icecancer.org` and its subdomains. This can be configured via the `ALLOWED_IFRAME_DOMAINS` environment variable
+- **Security Headers**: Includes `X-Content-Type-Options` and `X-Frame-Options` headers for additional browser-level protection
+
+### Environment Variables
+
+- `ALLOWED_IFRAME_DOMAINS`: Override default iframe domain restrictions (default: `https://icecancer.org https://*.icecancer.org`)
+- `PORT`: Server port (default: `5025`)
+
 ## How to Use
 
 1.  **Select a State**: Use the dropdown menu on the left to select a state you want to analyze. The map will zoom to that state and display its boundary.
