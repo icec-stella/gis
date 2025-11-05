@@ -33,9 +33,9 @@ app.use(limiter);
 
 // Enhanced security headers with Content Security Policy
 app.use((req, res, next) => {
-  // Get allowed iframe domains from environment variable, default to icecancer.org
-  // Set ALLOWED_IFRAME_DOMAINS in Render dashboard to override (e.g., "https://icecancer.org https://*.icecancer.org https://otherdomain.org")
-  const allowedIframeDomains = process.env.ALLOWED_IFRAME_DOMAINS || 'https://icecancer.org https://*.icecancer.org';
+  // Get allowed iframe domains from environment variable, default to allowing all for testing
+  // Set ALLOWED_IFRAME_DOMAINS in Render dashboard to restrict embedding (e.g., "https://icecancer.org https://*.icecancer.org")
+  const allowedIframeDomains = process.env.ALLOWED_IFRAME_DOMAINS || '*';
   
   // Build Content Security Policy
   const cspDirectives = [
@@ -52,8 +52,8 @@ app.use((req, res, next) => {
   
   // Additional security headers
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  // X-Frame-Options is set to DENY when we have specific domains (CSP frame-ancestors handles the whitelist)
-  res.setHeader('X-Frame-Options', 'DENY');
+  // X-Frame-Options based on iframe restrictions
+  res.setHeader('X-Frame-Options', allowedIframeDomains === '*' ? 'ALLOWALL' : 'DENY');
   
   next();
 });
