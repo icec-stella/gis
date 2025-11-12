@@ -745,8 +745,9 @@ async function populateStateDropdown() {
         // Set initial selection to US
         stateSelect.value = 'US';
         
-        // Trigger an initial analysis for US view
-        updateAnalysis();
+        // Load initial markers without showing dashboard button
+        // Dashboard button will only show when user clicks "Run Analysis"
+        await loadInitialMarkers();
     } catch (error) {
         console.error('Error loading states:', error);
     }
@@ -825,6 +826,8 @@ async function updateAnalysis() {
 
         // Show the "Dashboard" button
         document.getElementById('dashboard-button').classList.remove('d-none');
+        // Show the location toggle buttons
+        document.getElementById('location-toggle-container').classList.remove('d-none');
         // Show the location list container
         document.getElementById('location-list').classList.remove('d-none');
 
@@ -1117,6 +1120,11 @@ async function initializeApp() {
     // The loading overlay is already visible from the HTML
     await initializeMap();
     initializeEventListeners();
+    
+    // Ensure dashboard button and location toggle are hidden on initial load
+    document.getElementById('dashboard-button').classList.add('d-none');
+    document.getElementById('location-toggle-container').classList.add('d-none');
+    
     await populateStateDropdown();
 }
 
