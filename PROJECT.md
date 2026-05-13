@@ -1,6 +1,6 @@
 # Project overview: Walmart–LINAC GIS analysis
 
-This repository is a **Node.js web application** (package name `walmart-linac-mapper`) that maps **Walmart stores** and **radiation oncology LINAC centers** across the United States and supports **distance-based coverage analysis**. The goal is to visualize where Walmarts fall relative to LINAC facilities and to quantify “gaps”—for example, how many Walmarts in a state are **not** within a chosen radius (in miles) of **any** LINAC with valid coordinates.
+This repository is a **Node.js web application** (package name `walmart-linac-mapper`) that maps **Walmart stores** and **radiation oncology LINAC centers** across the United States and supports **drive-time coverage analysis** via the **OSRM Table service** (road network). The goal is to visualize where Walmart stores fall relative to LINAC facilities and to quantify “gaps”—for example, how many Walmart stores in a state have **no** eligible LINAC within a **maximum drive time** on real roads (**default 60 minutes**), per the rules in [OSRM Table service](#osrm-table-service).
 
 The GitHub remote for this codebase is [icec-stella/gis](https://github.com/icec-stella/gis).
 
@@ -15,17 +15,17 @@ The GitHub remote for this codebase is [icec-stella/gis](https://github.com/icec
    - US or state outline: GeoJSON boundaries loaded from [OpenStreetMap Nominatim](https://nominatim.openstreetmap.org/) through the server.
 
 2. **Run analysis**  
-   After choosing a state (or “United States”) and a radius, **Run Analysis** zooms the map, draws the boundary, shows relevant controls, and fetches **state-level metrics** from the API.
+   After choosing a state (or “United States”), **max drive time (minutes)** for OSRM, and **Run Analysis**, the app zooms the map, draws the boundary, shows relevant controls, and fetches **state-level metrics** from the API (`/api/metrics`).
 
 3. **Metrics**  
-   For the selected **state abbreviation** (or `US` for nationwide Walmart set), the server counts:  
-   - Walmarts in that state that have **no** LINAC within the radius (invalid Walmart coordinates are counted as “outside”).  
-   - Total Walmarts in the state.  
-   - LINAC **centers** in the state (`States` matches) and summed **LINAC machines** (`Number of LINACs`).  
-   Dashboard and table views show these figures; CSV/JSON export is available from the table modal.
+   Gap counts use **OSRM Table driving durations** only (see [OSRM Table service](#osrm-table-service)). For each **state abbreviation** (`state` query) or `US` (aggregated from per-state OSRM runs), the API reports:  
+   - **Walmart “gap” count:** Walmart stores in that **store’s state** (`w.state`) that have **no** eligible LINAC destination with drive time **≤** the chosen ceiling (stores with invalid coordinates are counted here).  
+   - **Total Walmart stores** in that state.  
+   - **LINAC inventory (not OSRM-derived):** count of LINAC **centers** in the state (`States` equals state) and summed **LINAC machines** (`Number of LINACs`).  
+   Dashboard and table views pull these figures from **`/api/metrics`**; CSV/JSON export reads the rendered metrics table.
 
 4. **Hide Walmarts**  
-   Optionally hides Walmart markers that **are** within the current radius of **any** displayed LINAC marker, emphasizing locations that remain—useful for “gap” visualization. The legend switches to describe those remaining pins.
+   Optionally hides Walmart markers that are within an **approximate straight-line radius** (~50 mph heuristic from the slider minutes) of **any** displayed LINAC marker—**not** OSRM-accurate; useful only for exploratory map thinning. Metrics remain OSRM-backed.
 
 ---
 
@@ -66,11 +66,98 @@ Together: **tiles = OSM raster**; **outlines = OSM-derived geometry via Nominati
 
 ---
 
+## OSRM Table service
+
+**Metrics and gap counts** are computed only from Project OSRM Table (see subsections below).
+
+Walmart-vs-LINAC **gap counts** (`walmartsOutsideRange` vs `within`) come **only** from the **Project OSRM Table** service wired in **`server.js`** (`linacRowsForDriveTimeOsrm`, `computeMetricsForStateAbbrev`, `getDriveTimes`, `getDriveTimesSingle`). There is **no** Haversine fallback for those counts.
+
+### API surface and versioning
+
+Project OSRM documents its HTTP API as a **v5-style** surface with paths such as **`/route/v1`**, **`/table/v1`**, and **`/nearest/v1`**—see the [OSRM HTTP API / Table service](http://project-osrm.org/docs/v5.24.0/api/#table-service) for the full parameter reference (this app uses the subset listed below).
+
+This repository hard-codes:
+
+- **Base URL:** `http://router.project-osrm.org/table/v1/driving`  
+  - **`table/v1`** — Table service revision segment in the path.  
+  - **`driving`** — routing **profile** (car, not foot/bike).  
+- **Important:** `router.project-osrm.org` is a **public demo**; the app does **not** pin an OSRM build, graph extract date, or contract SLAs. For publication-grade reproducibility, replace the base URL with a **self-hosted** or vendor OSRM instance and record that stack version.
+
+### HTTP request (single Table call)
+
+One matrix request is built in **`getDriveTimesSingle`**:
+
+1. **Method:** `GET` via axios, **`timeout: 120000`** (ms).
+2. **URL path after the base:**  
+   `/{lon0},{lat0};{lon1},{lat1};…;{lon_{S+D-1}},{lat_{S+D-1}}`  
+   - **Order:** every **Walmart (source)** coordinate appears **first** (indices **0 … S−1**), then every **LINAC (destination)** coordinate (indices **S … S+D−1**), where **S** = `sourceRows.length`, **D** = `destRows.length`.  
+   - **Axis order per pair:** **longitude, latitude** (OSRM convention).  
+   - **Precision:** each coordinate is serialized as **`Number(value.toFixed(5))`** (five decimal places).
+3. **Query string (fixed triple):**
+   - **`sources=`** — semicolon-separated indices **`0;1;…;S-1`** (every source row in the matrix).  
+   - **`destinations=`** — semicolon-separated indices **`S;S+1;…;S+D-1`** (every destination column).  
+   - **`annotations=duration`** — request **travel-time** matrix only (cell values are **seconds**). Distance annotations are **not** requested.
+
+Example shape (abbreviated):
+
+`GET …/table/v1/driving/lon₀,lat₀;…;lon_{S+D-1},lat_{S+D-1}?sources=0;…;S-1&destinations=S;…;S+D-1&annotations=duration`
+
+### Response validation
+
+The client accepts the response only when:
+
+- HTTP status is **200**;  
+- JSON **`code`** is **`'Ok'`**;  
+- **`durations`** is an **`S × D`** array aligned with **`sources`** / **`destinations`**.
+
+Otherwise axios still resolves but **`getDriveTimesSingle` throws**. **`GET /api/metrics`** catches failures and responds **503** with `{ error: 'Drive-time routing unavailable', message }`.
+
+Successful **`durations[i][j]`** values are finite **seconds**, or **`null`** (see below).
+
+### How `null` cells affect metrics
+
+Per OSRM, a Table cell may be **`null`** when no route duration is returned for that pair.
+
+For each Walmart (**source**) row **`i`**, **`computeMetricsForStateAbbrev`** sets **within ceiling** iff **any** destination column **`j`** satisfies:
+
+`durationsMatrix[i][j] != null && durationsMatrix[i][j] <= driveTimeThresholdSeconds`
+
+So **`null` never counts as “within range.”** A store with **all** columns **`null`** is treated like a **gap** (outside), alongside stores with all finite times above the ceiling.
+
+Sharding (**`getDriveTimes`** when **`S + D`** exceeds **`OSRM_MAX_COORDINATES_PER_REQUEST`**): partial results are merged into a full matrix prefilled with **`null`**. For each shard cell **`val`**, the merge does **`if (val == null) continue`**. If overlapping shards ever wrote multiple finite candidates for one **`(i,j)`**, the code keeps the **smaller** finite value (**`min`**), never replacing a known finite duration with **`null`**.
+
+### Drive-time ceiling (seconds)
+
+**`driveTimeThresholdSeconds`** for **`/api/metrics`** (**`computeMetricsForStateAbbrev`**):
+
+- Prefer **`driveTimeMinutes`** (`parseFloat`; if non-finite, **60**): threshold = **`minutes * 60`**.  
+- Else if legacy **`radius`** (miles) is set: **`(miles / 50) * 3600`** (fixed **50 mph** display proxy only).  
+- Else default **`3600`** (60 minutes).
+
+### Batching and cache (operational detail)
+
+- **`OSRM_MAX_COORDS_PER_REQUEST`:** parsed from env (default **96**), clamped **[40, 140]** — max **coordinate strings** (**S + D**) in one GET path. Larger problems are tiled; see **`getDriveTimes`** in **`server.js`**.  
+- **In-memory Table cache (`node-cache`):** optional (**`OSRM_CACHE_ENABLED`** default on). Cache key **`sha256`** of **`coordPathSegment|sourcesParam|destParam`**; TTL **`OSRM_CACHE_TTL_SECONDS`** (default seven days); optional cap **`OSRM_CACHE_MAX_KEYS`**.  
+- **US aggregates:** **`state=US`** runs **the same OSRM semantics per Walmart state** (`w.state`), in parallel batches of **`US_METRICS_STATE_CONCURRENCY`** (default **4**, max **24**)—no single national Table matrix.
+
+### Alaska / Hawaii / Puerto Rico destination rule
+
+Constant **`OSRM_BORDER_ISOLATED_STATES = new Set(['AK','HI','PR'])`**. Function **`linacRowsForDriveTimeOsrm(marketStateAbbr, linacLocations)`** decides which LINAC rows are **Table destinations** (columns) for a given **market** (the **`state`** query / each state in US aggregation):
+
+| Market state **`marketStateAbbr`** | LINAC destinations included |
+|------------------------------------|-----------------------------|
+| **`AK`**, **`HI`**, or **`PR`** | Only rows with **valid coords** **`and`** **`States === marketStateAbbr`** (within that territory only). |
+| Any **other** state (incl. every state summed for **`US`**) | All **valid-coord** LINAC rows **except** those whose `States` field is **AK**, **HI**, or **PR** — cross-border driving is allowed versus other states’ LINACs; isolated territories are excluded as unreachable road-network anchors for mainland gap tests. |
+
+**Sources** remain always Walmart stores **`w.state === marketStateAbbr`**; only the **destination LINAC set** changes by this rule.
+
+---
+
 ## Repository layout
 
 ```
 LINAC/
-├── server.js              # Express app, APIs, boundary proxy, Haversine math
+├── server.js              # Express app, APIs, Nominatim proxy, OSRM Table integration
 ├── package.json           # Scripts: npm start → node server.js; npm run dev → nodemon
 ├── public/
 │   ├── index.html         # Shell UI: state, radius, buttons, map, modals
@@ -100,10 +187,6 @@ LINAC/
 
 `loadDataFromFile(path)` reads JSON synchronously on each relevant request—simple and always fresh on read, suitable for modest file sizes.
 
-### Distance
-
-`calculateDistance(lat1, lon1, lat2, lon2)` uses the **Haversine** formula with Earth radius **3958.8 miles**, matching the radius slider (miles) in the UI.
-
 ### HTTP API (summary)
 
 | Method | Path | Purpose |
@@ -112,7 +195,7 @@ LINAC/
 | GET | `/api/states` | Sorted unique `state` values from Walmart JSON |
 | GET | `/api/cities` | Unique `Cities` from `city-centers.json` (empty if file missing) |
 | GET | `/api/map-data` | Query: `radius`, `city`, `initial`. Returns `{ walmart, cityCenter, linac }`. Walmarts are always unfiltered; LINACs are filtered to rows with both coordinates; city centers filter when `initial` is not `true` and `city` is set. |
-| GET | `/api/metrics` | Query: `state` (abbr or `US`), `radius`. Walmart/LINAC counts as described in “Metrics” above. |
+| GET | `/api/metrics` | Query: **`state`** (abbr or **`US`**), **`driveTimeMinutes`** (preferred), optional legacy **`radius`** (miles, converted via 50 mph to seconds ceiling). Returns gap counts (**OSRM**), Walmart totals, and state LINAC inventory—see [OSRM Table service](#osrm-table-service). |
 | GET | `/api/state-boundary/:state` | Returns `[{ geojson }]` from Nominatim for `US` or `"StateName, United States"`. |
 
 Static assets (HTML, JS, CSS, images) are served from `public/`.
@@ -124,21 +207,21 @@ Static assets (HTML, JS, CSS, images) are served from `public/`.
 ### Startup (`DOMContentLoaded` → `initializeApp`)
 
 1. **`initializeMap`** – Creates the Leaflet map, OSM layer, legend, fetches `/api/state-boundary/US`, draws the US outline, then **`loadInitialMarkers`**.  
-2. **`loadInitialMarkers`** – `GET /api/map-data?initial=true` with cache-busting; clears marker arrays; adds Walmart markers inside the US GeoJSON bounds; adds LINAC markers with US bounding-box validation; wires LINAC click to draw a **radius circle** in meters (`miles × 1609.34`).  
-3. **`populateStateDropdown`** – Loads states, prepends “United States” (`US`), default-selects `US`, then calls **`loadInitialMarkers` again** (markers load twice on cold start—worth knowing if optimizing).  
-4. **`initializeEventListeners`** – Radius slider, Run Analysis, toggles, dashboard, table view, modals.
+2. **`loadInitialMarkers`** – `GET /api/map-data?initial=true` with cache-busting; clears marker arrays; adds Walmart markers inside the US GeoJSON bounds; adds LINAC markers with US bounding-box validation; LINAC clicks **pan/zoom** the map (no drive-radius overlay).  
+3. **`populateStateDropdown`** – Loads states, prepends “United States” (`US`), default-selects `US`. Markers load from **`initializeMap`** (not from the dropdown handler).  
+4. **`initializeEventListeners`** – Drive-time slider, Run Analysis, toggles, dashboard, table view, modals.
 
 ### Run Analysis (`updateAnalysis`)
 
 - Requires a selected state (not empty / not `all`).  
-- For **`US`**: removes state layer, shows all markers, resets view, reloads US boundary, calls `/api/metrics?state=US&radius=…`.  
-- For a **state**: loads boundary via `/api/state-boundary/:state`, fits map (special bounds for Alaska), shows markers, fetches `/api/metrics?state=:abbr&radius=…`.  
+- For **`US`**: removes state layer, shows all markers, resets view, reloads US boundary, calls **`/api/metrics?state=US&driveTimeMinutes=…`**.  
+- For a **state**: loads boundary via **`/api/state-boundary/:state`**, fits map (special bounds for Alaska), shows markers, calls **`/api/metrics?state=:abbr&driveTimeMinutes=…`**.  
 - Updates the side **location list** using **point-in-polygon** tests against the state GeoJSON (not just bounding boxes).
 
 ### Frontend vs backend metrics
 
-- **Dashboard modal** metrics come from **`/api/metrics`** (server Haversine, per-state Walmart list vs **all** valid LINACs nationwide for distance checks).  
-- **Metrics table** (`populateTableData`) downloads **`/api/map-data?initial=true`** and recomputes per-state and US totals **in the browser** with the same Haversine logic—useful for a full comparison column in one sheet; keep slider radius in sync with what you export.
+- **Dashboard modal** and **metrics table** both load figures from **`/api/metrics`** with the same **`driveTimeMinutes`** query string—**OSRM Table** on the server, including the AK/HI/PR destination rule ([OSRM Table service](#osrm-table-service)).  
+- **Hide Walmarts** still uses **great-circle** distance on the map (Leaflet `distanceTo` with a **~50 mph** heuristic from the slider minutes)—**not** OSRM; do not equate that toggle with the API gap count.
 
 ### Marker visibility
 
@@ -173,8 +256,9 @@ The standalone README outlines install (`npm install`), run (`npm start` / `npm 
 ## Design notes and caveats
 
 1. **`city-centers.json` and `#city`** – Backend and JS anticipate city-level filtering; default UI/repo may not include both pieces—see Repository layout.  
-2. **Duplicate marker load** – `initializeMap` and `populateStateDropdown` both trigger full marker reloads unless refactored.  
-3. **Metric naming** – API field `cityCentersWithinRange` is a **legacy name** in code comments; response value is **LINAC center count for the selected state**, not “within radius.”  
+2. **Map “Hide Walmarts” vs OSRM gaps** – The hide toggle approximates proximity on the sphere; **`/api/metrics`** gaps are strictly **drive-time OSRM**.  
+3. **Metric naming** – API field **`cityCentersWithinRange`** is a **legacy name**; response value is **LINAC center count for the selected state**, not OSRM reachability-in-range. **`linacsWithinRange`** similarly names **summed LINAC machines in state**, not “within threshold.”  
 4. **Nominatim and OSM tiles** – Summarized under [OpenStreetMap (OSM)](#openstreetmap-osm); honour usage policies and cache if you scale traffic.  
+5. **OSRM demo dependency** – See [OSRM Table service](#osrm-table-service); swap to your own routing stack for repeatable study runs.
 
-This document reflects the codebase as wired today: Express + Leaflet SPA, JSON datasets, Haversine-based proximity, **OpenStreetMap tiles + Nominatim boundaries**, and modals for dashboard and exportable metrics tables.
+This document reflects the codebase as wired today: Express + Leaflet SPA, JSON datasets, **OSRM Table drive times** for published gap metrics (**OpenStreetMap tiles + Nominatim boundaries**, optional map-only great-circle thinning), and modals for dashboard and exportable metrics tables.

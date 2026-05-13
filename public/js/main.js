@@ -2,12 +2,27 @@
 let map;
 let walmartMarkers = [];
 let linacMarkers = [];
-let radiusCircles = [];
 let stateLayer;
-let selectedLocationCircle = null;
 let usBoundaryLayer;
 let legendControl; // Add global reference to legend control
 let walmartsHidden = false; // Track if Walmarts are being hidden
+
+/** Rough miles-per-hour for Walmart hide-toggle only (straight-line heuristic). Metrics use OSRM on the server. */
+const UI_AVG_MPH = 50;
+
+function getDriveTimeMinutes() {
+    const el = document.getElementById('max-drive-minutes');
+    if (!el) return 60;
+    const v = parseFloat(el.value, 10);
+    return Number.isFinite(v) ? v : 60;
+}
+
+/** Pan/zoom to a point when a location is selected from the map or list (no drive-time circle). */
+function flyMapTo(latLng, preferredZoom = 12) {
+    if (!map || !latLng) return;
+    const z = Math.max(preferredZoom, map.getZoom());
+    map.flyTo(latLng, z, { animate: true, duration: 0.35 });
+}
 
 const blueMarkerIcon = L.icon({
     iconUrl: '/images/markers/marker-icon-blue.png',
@@ -170,6 +185,20 @@ function createCacheBustingUrl(url) {
     return `${url}${separator}_=${cacheBuster}`;
 }
 
+async function parseJsonOrThrow(response) {
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const msg =
+            body && typeof body === 'object' && body.message
+                ? String(body.message)
+                : body && typeof body === 'object' && body.error
+                  ? String(body.error)
+                  : `HTTP ${response.status}`;
+        throw new Error(msg);
+    }
+    return body;
+}
+
 // Update all fetch calls to use cacheBusting
 async function fetchWithCacheBusting(url, options = {}) {
     const cacheBustingUrl = createCacheBustingUrl(url);
@@ -182,10 +211,7 @@ async function fetchWithCacheBusting(url, options = {}) {
             'Expires': '0'
         }
     });
-    if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return response.json();
+    return parseJsonOrThrow(response);
 }
 
 // Update loadInitialMarkers function
@@ -271,36 +297,9 @@ async function loadInitialMarkers() {
                 
                 // Add click event handler for LINAC markers
                 marker.on('click', function() {
-                    const radius = document.getElementById('radius').value;
-                    
-                    // Remove existing circle if any
-                    if (selectedLocationCircle) {
-                        map.removeLayer(selectedLocationCircle);
-                    }
-                    
-                    // Calculate appropriate zoom level based on radius
-                    const zoomLevel = calculateZoomLevel(radius * 1609.34);
-                    
-                    // Create new circle for the LINAC
-                    selectedLocationCircle = L.circle(latLng, {
-                        radius: radius * 1609.34, // Convert miles to meters
-                        color: 'red',
-                        fillColor: '#f03',
-                        fillOpacity: 0.1
-                    }).addTo(map);
-                    
-                    // Create a bounds object centered on the location
-                    const bounds = selectedLocationCircle.getBounds();
-                    
-                    // Fit the map to these bounds and force the zoom level
-                    map.fitBounds(bounds, {
-                        animate: true,
-                        duration: 0.3,
-                        maxZoom: zoomLevel,
-                        padding: [50, 50] // Add some padding around the circle
-                    });
+                    flyMapTo(latLng, 12);
                 });
-                
+
                 linacMarkers.push(marker);
             }
             loadedMarkers++;
@@ -327,6 +326,9 @@ function checkLoadingComplete(loaded, total) {
 
 function hideLoadingOverlay() {
     const overlay = document.getElementById('loading-overlay');
+    if (!overlay) {
+        return;
+    }
     overlay.classList.add('fade-out');
     // Remove the overlay from DOM after fade animation
     setTimeout(() => {
@@ -336,42 +338,35 @@ function hideLoadingOverlay() {
 
 // Initialize event listeners
 function initializeEventListeners() {
-    const radiusSlider = document.getElementById('radius');
-    const radiusValue = document.getElementById('radius-value');
+    const driveTimeSlider = document.getElementById('max-drive-minutes');
+    const driveTimeValueLabel = document.getElementById('max-drive-minutes-value');
     const stateSelect = document.getElementById('state');
     const analyzeButton = document.getElementById('analyze');
 
-    radiusSlider.addEventListener('input', async (e) => {
-        const radius = e.target.value;
-        radiusValue.textContent = radius;
-        console.log(`[Frontend] Radius changed to: ${radius}`);
+    driveTimeSlider.addEventListener('input', async (e) => {
+        const minutes = e.target.value;
+        driveTimeValueLabel.textContent = minutes;
+        console.log(`[Frontend] Max drive time changed to: ${minutes} min`);
         
-        // Update circle radius if one exists
-        if (selectedLocationCircle) {
-            selectedLocationCircle.setRadius(radius * 1609.34);
-        }
-        
-        // Update legend with new radius only if Walmarts are hidden
         if (walmartsHidden) {
             updateLegend();
         }
         
-        // Update metrics when radius changes
         if (stateSelect.value && stateSelect.value !== 'all') {
             const selectedState = stateSelect.value;
             
             try {
-                console.log(`[Frontend] Fetching metrics for state: ${selectedState}, radius: ${radius}`);
-                const response = await fetch(`/api/metrics?state=${selectedState}&radius=${radius}`);
-                const metrics = await response.json();
+                const q = `state=${encodeURIComponent(selectedState)}&driveTimeMinutes=${encodeURIComponent(minutes)}`;
+                console.log(`[Frontend] Fetching metrics for ${q}`);
+                const response = await fetch(`/api/metrics?${q}`);
+                const metrics = await parseJsonOrThrow(response);
                 console.log('[Frontend] Received metrics:', metrics);
                 
-                // Update the metrics display if modal is open
                 if (!document.getElementById('dashboard-modal').classList.contains('d-none')) {
                     const metricsHTML = `
                         <div class="metric-card">
                             <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
-                            <div class="metric-label">Walmarts Not Within ${radius} Miles of LINAC</div>
+                            <div class="metric-label">Walmarts with no LINAC within ${minutes} min drive (OSRM, incl. across state lines; AK, HI &amp; PR isolated)</div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-value">${metrics.totalWalmarts || 0}</div>
@@ -390,12 +385,17 @@ function initializeEventListeners() {
                     document.getElementById('modal-dashboard-metrics').innerHTML = metricsHTML;
                 }
                 
-                // If table view is active, update it as well
                 if (document.getElementById('metrics-table-body')) {
                     createMetricsTable();
                 }
             } catch (error) {
                 console.error('Error updating metrics:', error);
+                const modal = document.getElementById('dashboard-modal');
+                const mEl = document.getElementById('modal-dashboard-metrics');
+                if (mEl && modal && !modal.classList.contains('d-none')) {
+                    const safe = String(error.message || error).replace(/</g, '&lt;');
+                    mEl.innerHTML = `<div class="alert alert-danger m-3" role="alert">${safe}</div>`;
+                }
             }
         }
     });
@@ -414,7 +414,7 @@ function initializeEventListeners() {
     // Update dashboard button click handler
     document.getElementById('dashboard-button').addEventListener('click', async () => {
         const selectedState = document.getElementById('state').value;
-        const radius = document.getElementById('radius').value;
+        const minutes = getDriveTimeMinutes();
         
         // Reset the modal content back to the dashboard view
         const modalContent = document.getElementById('dashboard-modal');
@@ -459,13 +459,15 @@ function initializeEventListeners() {
 
         // Fetch and display metrics for the current state
         try {
-            const response = await fetch(`/api/metrics?state=${selectedState}&radius=${radius}`);
-            const metrics = await response.json();
-            
+            const response = await fetch(
+                `/api/metrics?state=${encodeURIComponent(selectedState)}&driveTimeMinutes=${encodeURIComponent(minutes)}`
+            );
+            const metrics = await parseJsonOrThrow(response);
+
             const metricsHTML = `
                 <div class="metric-card">
                     <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
-                    <div class="metric-label">Walmarts Not Within ${radius} Miles of LINAC</div>
+                    <div class="metric-label">Walmarts with no LINAC within ${minutes} min drive (OSRM, incl. across state lines; AK, HI &amp; PR isolated)</div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-value">${metrics.totalWalmarts || 0}</div>
@@ -484,6 +486,10 @@ function initializeEventListeners() {
             document.getElementById('modal-dashboard-metrics').innerHTML = metricsHTML;
         } catch (error) {
             console.error('Error fetching metrics:', error);
+            const safe = String(error.message || error).replace(/</g, '&lt;');
+            document.getElementById('modal-dashboard-metrics').innerHTML = `
+                <div class="alert alert-danger m-3" role="alert">${safe}</div>
+            `;
             document.getElementById('modal-dashboard-metrics').innerHTML = `
                 <div class="alert alert-danger">
                     Error loading metrics. Please try again later.
@@ -548,59 +554,30 @@ function clearMap() {
     linacMarkers.forEach(marker => marker.remove());
     walmartMarkers = [];
     linacMarkers = [];
-    radiusCircles.forEach(circle => circle.remove());
-    radiusCircles = [];
 }
 
 // Update map markers
 function updateMapMarkers(data) {
-    radiusCircles.forEach(circle => circle.remove());
-    radiusCircles = [];
-    
-    const radius = document.getElementById('radius').value;
     const selectedCity = document.getElementById('city').value;
 
-    // Add radius circle for selected city
     if (selectedCity && selectedCity !== 'all' && data.cityCenter.length > 0) {
         const selectedLocation = data.cityCenter[0];
-        
+
         console.log('Selected city center:', selectedLocation);
 
-        if (!selectedLocation.Latitude || !selectedLocation.Longtitude) {
+        const lonRaw = selectedLocation.Longitude != null ? selectedLocation.Longitude : selectedLocation.Longtitude;
+        if (!selectedLocation.Latitude || lonRaw == null) {
             console.error('Invalid city center coordinates:', selectedLocation);
             return;
         }
 
-        const circle = L.circle([
-            parseFloat(selectedLocation.Latitude), 
-            parseFloat(selectedLocation.Longtitude)
-        ], {
-            radius: radius * 1609.34,
-            color: 'red',
-            fillColor: '#f03',
-            fillOpacity: 0.1
-        }).addTo(map);
-        radiusCircles.push(circle);
-
-        const zoom = calculateZoomLevel(radius * 1609.34);
-        map.setView([
-            parseFloat(selectedLocation.Latitude), 
-            parseFloat(selectedLocation.Longtitude)
-        ], zoom);
+        const lat = parseFloat(selectedLocation.Latitude);
+        const lng = parseFloat(lonRaw);
+        map.setView([lat, lng], 10);
     }
 }
 
-// Helper function to calculate appropriate zoom level
-function calculateZoomLevel(radiusInMeters) {
-    // These are approximate zoom levels that work well with different radius sizes
-    if (radiusInMeters > 80000) return 8;      // 50+ miles
-    if (radiusInMeters > 48000) return 9;      // 30-50 miles
-    if (radiusInMeters > 32000) return 9;      // 20-30 miles
-    if (radiusInMeters > 16000) return 10;     // 10-20 miles
-    return 10;                                 // < 10 miles
-}
-
-// Update displayMetrics function to include the radius in the label
+// Update displayMetrics function
 function displayMetrics(metrics) {
     // Don't do anything if we're in table view
     const tableViewActive = document.getElementById('metrics-table-body') !== null;
@@ -615,11 +592,11 @@ function displayMetrics(metrics) {
     }
     
     if (metrics) {
-        const radius = document.getElementById('radius').value;
+        const minutes = getDriveTimeMinutes();
         const metricsHTML = `
             <div class="metric-card">
                 <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
-                <div class="metric-label">Walmarts Not Within ${radius} Miles of LINAC</div>
+                <div class="metric-label">Walmarts with no LINAC within ${minutes} min drive (OSRM, incl. across state lines; AK, HI &amp; PR isolated)</div>
             </div>
             <div class="metric-card">
                 <div class="metric-value">${metrics.totalWalmarts || 0}</div>
@@ -662,25 +639,32 @@ async function populateCityDropdown() {
 // Update dashboard metrics
 async function updateDashboardMetrics() {
     try {
-        const radius = document.getElementById('radius').value;
+        const minutes = getDriveTimeMinutes();
         const state = document.getElementById('state').value;
         
-        const response = await fetch(`/api/metrics?state=${state}&radius=${radius}`);
-        const metrics = await response.json();
-        
+        const response = await fetch(
+            `/api/metrics?state=${encodeURIComponent(state)}&driveTimeMinutes=${encodeURIComponent(minutes)}`
+        );
+        const metrics = await parseJsonOrThrow(response);
+
         displayMetrics(metrics);
     } catch (error) {
         console.error('Error updating metrics:', error);
+        const mEl = document.getElementById('modal-dashboard-metrics');
+        if (mEl) {
+            const safe = String(error.message || error).replace(/</g, '&lt;');
+            mEl.innerHTML = `<div class="alert alert-danger m-3" role="alert">${safe}</div>`;
+        }
     }
 }
 
 // Update map data
 async function updateMapData() {
     try {
-        const radius = document.getElementById('radius').value;
+        const minutes = getDriveTimeMinutes();
         const city = document.getElementById('city').value;
         
-        const response = await fetch(`/api/map-data?radius=${radius}&city=${city}`);
+        const response = await fetch(`/api/map-data?driveTimeMinutes=${encodeURIComponent(minutes)}&city=${city}`);
         const data = await response.json();
         
         updateMapMarkers(data);
@@ -744,10 +728,8 @@ async function populateStateDropdown() {
 
         // Set initial selection to US
         stateSelect.value = 'US';
-        
-        // Load initial markers without showing dashboard button
-        // Dashboard button will only show when user clicks "Run Analysis"
-        await loadInitialMarkers();
+
+        // Markers are already loaded in initializeMap → loadInitialMarkers(); do not call again here
     } catch (error) {
         console.error('Error loading states:', error);
     }
@@ -875,9 +857,11 @@ async function updateAnalysis() {
             }
 
             // Get nationwide metrics from server
-            const radius = document.getElementById('radius').value;
-            const metricsResponse = await fetch(`/api/metrics?state=US&radius=${radius}`);
-            const metrics = await metricsResponse.json();
+            const minutes = getDriveTimeMinutes();
+            const metricsResponse = await fetch(
+                `/api/metrics?state=US&driveTimeMinutes=${encodeURIComponent(minutes)}`
+            );
+            const metrics = await parseJsonOrThrow(metricsResponse);
 
             displayMetrics(metrics);
         } else {
@@ -893,9 +877,11 @@ async function updateAnalysis() {
             linacMarkers.forEach(marker => marker.setOpacity(1));
 
             // Get state metrics from server
-            const radius = document.getElementById('radius').value;
-            const response = await fetch(`/api/metrics?state=${state}&radius=${radius}`);
-            const metrics = await response.json();
+            const minutes = getDriveTimeMinutes();
+            const response = await fetch(
+                `/api/metrics?state=${encodeURIComponent(state)}&driveTimeMinutes=${encodeURIComponent(minutes)}`
+            );
+            const metrics = await parseJsonOrThrow(response);
 
             displayMetrics(metrics);
         }
@@ -956,8 +942,7 @@ function updateLocationList() {
     const listContainer = document.getElementById('location-list');
     const showWalmart = document.getElementById('walmart-toggle').checked;
     const selectedState = document.getElementById('state').value;
-    const radius = document.getElementById('radius').value;
-    
+
     listContainer.innerHTML = '';
     let locationsFound = 0;
     
@@ -993,33 +978,7 @@ function updateLocationList() {
                 }
                 
                 div.addEventListener('click', () => {
-                    // Remove existing circle if any
-                    if (selectedLocationCircle) {
-                        map.removeLayer(selectedLocationCircle);
-                    }
-                    
-                    // Calculate appropriate zoom level based on radius
-                    const zoomLevel = calculateZoomLevel(radius * 1609.34);
-                    
-                    // Create new circle with blue color for Walmart
-                    selectedLocationCircle = L.circle(location, {
-                        radius: radius * 1609.34, // Convert miles to meters
-                        color: '#0d6efd', // Bootstrap primary blue
-                        fillColor: '#0d6efd',
-                        fillOpacity: 0.1
-                    }).addTo(map);
-                    
-                    // Create a bounds object centered on the location
-                    const bounds = selectedLocationCircle.getBounds();
-                    
-                    // Fit the map to these bounds and force the zoom level
-                    map.fitBounds(bounds, {
-                        animate: true,
-                        duration: 0.3,
-                        maxZoom: zoomLevel,
-                        padding: [50, 50] // Add some padding around the circle
-                    });
-                    
+                    flyMapTo(location, 12);
                     marker.openPopup();
                 });
                 
@@ -1059,33 +1018,7 @@ function updateLocationList() {
                 }
                 
                 div.addEventListener('click', () => {
-                    // Remove existing circle if any
-                    if (selectedLocationCircle) {
-                        map.removeLayer(selectedLocationCircle);
-                    }
-                    
-                    // Calculate appropriate zoom level based on radius
-                    const zoomLevel = calculateZoomLevel(radius * 1609.34);
-                    
-                    // Create new circle with blue color for Walmart
-                    selectedLocationCircle = L.circle(location, {
-                        radius: radius * 1609.34, // Convert miles to meters
-                        color: 'red',
-                        fillColor: '#f03',
-                        fillOpacity: 0.1
-                    }).addTo(map);
-                    
-                    // Create a bounds object centered on the location
-                    const bounds = selectedLocationCircle.getBounds();
-                    
-                    // Fit the map to these bounds and force the zoom level
-                    map.fitBounds(bounds, {
-                        animate: true,
-                        duration: 0.3,
-                        maxZoom: zoomLevel,
-                        padding: [50, 50] // Add some padding around the circle
-                    });
-                    
+                    flyMapTo(location, 12);
                     marker.openPopup();
                 });
                 
@@ -1101,18 +1034,6 @@ function updateLocationList() {
         emptyMessage.innerHTML = 'None Found';
         listContainer.appendChild(emptyMessage);
     }
-}
-
-// Helper function to check if a marker is within a circle
-function isMarkerInCircle(marker, circle) {
-    if (!circle) return false;
-    
-    const markerLatLng = marker.getLatLng();
-    const circleLatLng = circle.getLatLng();
-    const circleRadius = circle.getRadius();
-    
-    const distance = markerLatLng.distanceTo(circleLatLng);
-    return distance <= circleRadius;
 }
 
 // Initialize the application
@@ -1135,8 +1056,8 @@ document.addEventListener('DOMContentLoaded', initializeApp);
 function hideWalmartsNearLinac() {
     console.log('Starting hideWalmartsNearLinac...');
     // Get the current radius value from the input
-    const radiusValue = parseFloat(document.getElementById('radius').value);
-    console.log(`Radius value: ${radiusValue} miles`);
+    const maxStraightLineMiles = (getDriveTimeMinutes() / 60) * UI_AVG_MPH;
+    console.log(`Max approx. miles (straight line for toggle): ${maxStraightLineMiles}`);
     console.log(`Total Walmart markers to process: ${walmartMarkers.length}`);
     console.log(`Total LINAC markers to check against: ${linacMarkers.length}`);
     
@@ -1146,8 +1067,8 @@ function hideWalmartsNearLinac() {
     walmartMarkers.forEach(walmartMarker => {
         // Check if this Walmart is within the specified radius of any LINAC
         const isNearLinac = linacMarkers.some(linacMarker => {
-            const distance = walmartMarker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
-            return distance <= radiusValue;
+            const distanceMi = walmartMarker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
+            return distanceMi <= maxStraightLineMiles;
         });
 
         if (isNearLinac) {
@@ -1197,7 +1118,7 @@ function showAllWalmarts() {
 
 // Update createMetricsTable function
 function createMetricsTable() {
-    const radius = document.getElementById('radius').value;
+    const minutes = getDriveTimeMinutes();
     const modalContent = document.getElementById('dashboard-modal');
     modalContent.innerHTML = `
         <div class="modal-content">
@@ -1219,7 +1140,10 @@ function createMetricsTable() {
                         <thead class="metrics-table-header">
                             <tr>
                                 <th>State</th>
-                                <th class="text-end">Walmarts Not Within<br>${radius} Miles</th>
+                                <th class="text-end">
+                                    <div>No LINAC within ${minutes} min (OSRM)</div>
+                                    <div class="small text-muted fw-normal mt-1 lh-sm">Incl. bordering states. Cross-border excludes AK, HI &amp; PR LINACs; those rows use in-state LINACs only.</div>
+                                </th>
                                 <th class="text-end">Total<br>Walmarts</th>
                                 <th class="text-end">LINAC<br>Centers</th>
                                 <th class="text-end">Total<br>LINACs</th>
@@ -1256,9 +1180,9 @@ function createMetricsTable() {
 
 // Add new function to handle CSV download
 function downloadMetricsCSV() {
-    const radius = document.getElementById('radius').value;
+    const minutes = getDriveTimeMinutes();
     const table = document.querySelector('.metrics-table');
-    let csvContent = `State,Not Within ${radius} Miles,Total Walmarts,LINAC Centers,Total LINACs\n`;
+    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM cross-border excl AK HI PR anchors),Total Walmarts,LINAC Centers,Total LINACs\n`;
 
     // Get all table rows
     const rows = table.querySelectorAll('tbody tr');
@@ -1283,7 +1207,7 @@ function downloadMetricsCSV() {
     const url = URL.createObjectURL(blob);
     
     link.setAttribute('href', url);
-    link.setAttribute('download', `linac-walmart-metrics-${radius}mi.csv`);
+    link.setAttribute('download', `linac-walmart-metrics-${minutes}min-osrm.csv`);
     link.style.visibility = 'hidden';
     
     document.body.appendChild(link);
@@ -1293,7 +1217,7 @@ function downloadMetricsCSV() {
 
 // Add new function to handle JSON download
 function downloadMetricsJSON() {
-    const radius = document.getElementById('radius').value;
+    const minutes = getDriveTimeMinutes();
     const table = document.querySelector('.metrics-table');
     const rows = table.querySelectorAll('tbody tr');
     const jsonData = [];
@@ -1314,7 +1238,7 @@ function downloadMetricsJSON() {
                 totalWalmarts,
                 linacCenters,
                 totalLinacs,
-                radius: parseInt(radius)
+                driveTimeMinutes: parseInt(minutes, 10)
             });
         }
     });
@@ -1326,7 +1250,7 @@ function downloadMetricsJSON() {
     const url = URL.createObjectURL(blob);
     
     link.setAttribute('href', url);
-    link.setAttribute('download', `linac-walmart-metrics-${radius}mi.json`);
+    link.setAttribute('download', `linac-walmart-metrics-${minutes}min-osrm.json`);
     link.style.visibility = 'hidden';
     
     document.body.appendChild(link);
@@ -1334,214 +1258,106 @@ function downloadMetricsJSON() {
     document.body.removeChild(link);
 }
 
-// Update populateTableData function
+function metricsTableLoadingRow(doneStates, totalStates) {
+    return `
+            <tr id="metrics-table-loading-banner">
+                <td colspan="5" class="text-center py-2 text-muted bg-light border-bottom">
+                    <div class="d-flex justify-content-center align-items-center gap-2 flex-wrap py-2">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></div>
+                        <span>Loading state metrics (${doneStates} / ${totalStates})...</span>
+                    </div>
+                </td>
+            </tr>`;
+}
+
+function sumMetricsTotals(metricsList) {
+    return metricsList.reduce(
+        (acc, m) => ({
+            walmartsOutsideRange: acc.walmartsOutsideRange + (m.walmartsOutsideRange || 0),
+            totalWalmarts: acc.totalWalmarts + (m.totalWalmarts || 0),
+            cityCentersWithinRange: acc.cityCentersWithinRange + (m.cityCentersWithinRange || 0),
+            linacsWithinRange: acc.linacsWithinRange + (m.linacsWithinRange || 0)
+        }),
+        {
+            walmartsOutsideRange: 0,
+            totalWalmarts: 0,
+            cityCentersWithinRange: 0,
+            linacsWithinRange: 0
+        }
+    );
+}
+
+function renderMetricsRow(st, metrics, isStrong) {
+    const m = metrics;
+    const a = isStrong ? '<strong>' : '';
+    const z = isStrong ? '</strong>' : '';
+    return `
+        <tr${isStrong ? ' class="us-total-row"' : ''}>
+            <td>${a}${st}${z}</td>
+            <td class="text-end">${a}${(m.walmartsOutsideRange || 0).toLocaleString()}${z}</td>
+            <td class="text-end">${a}${(m.totalWalmarts || 0).toLocaleString()}${z}</td>
+            <td class="text-end">${a}${(m.cityCentersWithinRange || 0).toLocaleString()}${z}</td>
+            <td class="text-end">${a}${(m.linacsWithinRange || 0).toLocaleString()}${z}</td>
+        </tr>
+    `;
+}
+
+// Metrics table rows use /api/metrics (OSRM Table on server) — same logic as dashboard, not client Haversine.
 async function populateTableData() {
     const tableBody = document.getElementById('metrics-table-body');
-    const radius = document.getElementById('radius').value;
-    let tableRows = '';
-    let usTotals = {
-        walmartsOutsideRange: 0,
-        totalWalmarts: 0,
-        linacCenters: 0,
-        totalLinacs: 0
-    };
+    const minutes = getDriveTimeMinutes();
+    const CONCURRENCY = 3;
 
     try {
-        console.log(`--- DEBUG: Starting table data population with radius ${radius} ---`);
-        // Fetch datasets through API endpoints with cache busting
-        const mapData = await fetchWithCacheBusting('/api/map-data?initial=true');
-        
-        // Extract data from the response
-        const walmartData = mapData.walmart || [];
-        const linacData = mapData.linac || [];
-        
-        console.log(`Loaded Walmart locations: ${walmartData.length}`);
-        console.log(`Loaded LINAC locations: ${linacData.length}`);
-        console.log(`First LINAC: `, JSON.stringify(linacData[0]).substring(0, 200));
-        console.log(`Last LINAC: `, JSON.stringify(linacData[linacData.length-1]).substring(0, 200));
-
-        // Sample a few LINAC entries to verify data structure
-        console.log(`--- DEBUG: Sampling LINAC entries to verify structure ---`);
-        const sampleSize = Math.min(5, linacData.length);
-        for (let i = 0; i < sampleSize; i++) {
-            const index = Math.floor(Math.random() * linacData.length);
-            console.log(`Sample LINAC ${i+1}:`, {
-                name: linacData[index]['LINAC Name'],
-                state: linacData[index].States,
-                lat: linacData[index].Latitude,
-                lng: linacData[index].Longitude,
-                numLinacs: linacData[index]['Number of LINACs']
-            });
-        }
-
-        // Process each state
         const states = Array.from(document.getElementById('state').options)
-            .map(option => ({ value: option.value, text: option.text }))
-            .filter(option => option.value !== 'all' && option.value !== 'US' && option.value !== '')
+            .map((option) => ({ value: option.value, text: option.text }))
+            .filter((option) => option.value !== 'all' && option.value !== 'US' && option.value !== '')
             .sort((a, b) => a.text.localeCompare(b.text));
-        
-        // Calculate US totals
-        usTotals.totalWalmarts = walmartData.length;
-        usTotals.linacCenters = linacData.length;
-        usTotals.totalLinacs = linacData.reduce((sum, location) => sum + (parseInt(location['Number of LINACs']) || 0), 0);
-        
-        // Helper function to calculate distance between two points
-        function calculateDistance(lat1, lon1, lat2, lon2) {
-            // Convert latitude and longitude from degrees to radians
-            const radLat1 = (Math.PI * lat1) / 180;
-            const radLon1 = (Math.PI * lon1) / 180;
-            const radLat2 = (Math.PI * lat2) / 180;
-            const radLon2 = (Math.PI * lon2) / 180;
-            
-            // Haversine formula
-            const dLat = radLat2 - radLat1;
-            const dLon = radLon2 - radLon1;
-            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                      Math.cos(radLat1) * Math.cos(radLat2) *
-                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-            
-            // Radius of the Earth in miles
-            const R = 3958.8; // miles
-            
-            // Calculate the distance
-            return R * c;
-        }
-        
-        // Debug for US calculations
-        console.log(`--- DEBUG: Starting US total calculations ---`);
-        let withinRangeCounter = 0;
-        let outsideRangeCounter = 0;
-        let invalidCoordCounter = 0;
-        
-        // Calculate Walmarts outside range for US total
-        usTotals.walmartsOutsideRange = 0;
-        for (const walmart of walmartData) {
-            if (!walmart.latitude || !walmart.longitude) {
-                usTotals.walmartsOutsideRange++;
-                invalidCoordCounter++;
-                continue;
-            }
-            
-            let isWithinRange = false;
-            for (const linac of linacData) {
-                if (!linac.Latitude || !linac.Longitude) continue;
-                
-                const distance = calculateDistance(
-                    parseFloat(walmart.latitude),
-                    parseFloat(walmart.longitude),
-                    parseFloat(linac.Latitude),
-                    parseFloat(linac.Longitude)
-                );
-                
-                if (distance <= radius) {
-                    isWithinRange = true;
-                    break;
-                }
-            }
-            
-            if (!isWithinRange) {
-                usTotals.walmartsOutsideRange++;
-                outsideRangeCounter++;
-            } else {
-                withinRangeCounter++;
-            }
-        }
-        
-        console.log(`US calculations: ${withinRangeCounter} within range, ${outsideRangeCounter} outside range, ${invalidCoordCounter} invalid coords`);
-        console.log(`US total Walmarts outside range: ${usTotals.walmartsOutsideRange}`);
-        
-        // Now calculate for each state
-        console.log(`--- DEBUG: Starting state calculations ---`);
-        const stateDebug = {};
-        
-        for (const state of states) {
-            // Calculate metrics for each state
-            const stateWalmarts = walmartData.filter(location => location.state === state.value);
-            const stateLinacCenters = linacData.filter(location => location.States === state.value);
-            const stateWalmartsCount = stateWalmarts.length;
-            const stateLinacCentersCount = stateLinacCenters.length;
-            const stateTotalLinacs = stateLinacCenters.reduce((sum, location) => sum + (parseInt(location['Number of LINACs']) || 0), 0);
-            
-            // Debug info
-            stateDebug[state.value] = {
-                walmarts: stateWalmartsCount,
-                linacCenters: stateLinacCentersCount,
-                totalLinacs: stateTotalLinacs
-            };
-            
-            // Calculate Walmarts outside range for this state
-            let stateWalmartsOutsideRange = 0;
-            let stateWithinRange = 0;
-            let stateInvalidCoords = 0;
-            
-            for (const walmart of stateWalmarts) {
-                if (!walmart.latitude || !walmart.longitude) {
-                    stateWalmartsOutsideRange++;
-                    stateInvalidCoords++;
-                    continue;
-                }
-                
-                let isWithinRange = false;
-                for (const linac of linacData) {
-                    if (!linac.Latitude || !linac.Longitude) continue;
-                    
-                    const distance = calculateDistance(
-                        parseFloat(walmart.latitude),
-                        parseFloat(walmart.longitude),
-                        parseFloat(linac.Latitude),
-                        parseFloat(linac.Longitude)
-                    );
-                    
-                    if (distance <= radius) {
-                        isWithinRange = true;
-                        break;
-                    }
-                }
-                
-                if (!isWithinRange) {
-                    stateWalmartsOutsideRange++;
-                } else {
-                    stateWithinRange++;
-                }
-            }
-            
-            stateDebug[state.value].outsideRange = stateWalmartsOutsideRange;
-            stateDebug[state.value].withinRange = stateWithinRange;
-            stateDebug[state.value].invalidCoords = stateInvalidCoords;
 
-            tableRows += `
-                <tr>
-                    <td>${state.text}</td>
-                    <td class="text-end">${stateWalmartsOutsideRange.toLocaleString()}</td>
-                    <td class="text-end">${stateWalmartsCount.toLocaleString()}</td>
-                    <td class="text-end">${stateLinacCentersCount.toLocaleString()}</td>
-                    <td class="text-end">${stateTotalLinacs.toLocaleString()}</td>
-                </tr>
-            `;
+        const fetchMetrics = (stateCode) =>
+            fetchWithCacheBusting(
+                `/api/metrics?state=${encodeURIComponent(stateCode)}&driveTimeMinutes=${encodeURIComponent(minutes)}`
+            );
+
+        console.log(`[Table] OSRM reachability per state (${minutes} min; cross-border contiguous, AK/HI/PR isolated). US row = sum.`);
+
+        let tableRows = '';
+        /** @type {{ walmartsOutsideRange: number, totalWalmarts: number, cityCentersWithinRange: number, linacsWithinRange: number }[]} */
+        const metricsForTotals = [];
+
+        tableBody.innerHTML = metricsTableLoadingRow(0, states.length);
+
+        let doneStates = 0;
+        const totalStates = states.length;
+        for (let i = 0; i < states.length; i += CONCURRENCY) {
+            const slice = states.slice(i, i + CONCURRENCY);
+            const batch = await Promise.all(
+                slice.map(async (s) => ({
+                    state: s,
+                    metrics: await fetchMetrics(s.value)
+                }))
+            );
+            doneStates += batch.length;
+            for (const { state: st, metrics: m } of batch) {
+                tableRows += renderMetricsRow(st.text, m, false);
+                metricsForTotals.push(m);
+            }
+
+            tableBody.innerHTML =
+                metricsTableLoadingRow(doneStates, totalStates) +
+                tableRows;
         }
-        
-        console.log('State debug info:', stateDebug);
 
-        // Add US totals row at the beginning
-        const usTotalRow = `
-            <tr class="us-total-row">
-                <td><strong>United States</strong></td>
-                <td class="text-end"><strong>${usTotals.walmartsOutsideRange.toLocaleString()}</strong></td>
-                <td class="text-end"><strong>${usTotals.totalWalmarts.toLocaleString()}</strong></td>
-                <td class="text-end"><strong>${usTotals.linacCenters.toLocaleString()}</strong></td>
-                <td class="text-end"><strong>${usTotals.totalLinacs.toLocaleString()}</strong></td>
-            </tr>
-        `;
+        const usTotals = sumMetricsTotals(metricsForTotals);
 
-        tableBody.innerHTML = usTotalRow + tableRows;
-        console.log(`--- DEBUG: Table population complete ---`);
+        tableBody.innerHTML = renderMetricsRow('United States (sum)', usTotals, true) + tableRows;
+        console.log('[Table] Metrics table ready (US row summed from states).');
     } catch (error) {
-        console.error('Error loading data for table:', error);
+        console.error('Error loading table metrics:', error);
         tableBody.innerHTML = `
             <tr>
                 <td colspan="5" class="text-center text-danger">
-                    Error loading data: ${error.message}
+                    Error loading metrics: ${error.message}
                 </td>
             </tr>
         `;
@@ -1599,8 +1415,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Update getLegendHTML function
 function getLegendHTML() {
-    const radius = document.getElementById('radius')?.value || '35';
-    
     if (walmartsHidden) {
         return `
             <div>

@@ -4,7 +4,9 @@ const path = require('path');
 const fetch = require('node-fetch');
 const https = require('https');
 const axios = require('axios');
+const crypto = require('crypto');
 const fs = require('fs');
+const NodeCache = require('node-cache');
 const rateLimit = require('express-rate-limit');
 
 // Minimal startup logging
@@ -44,7 +46,7 @@ app.use((req, res, next) => {
     "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com",
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com",
     "font-src 'self' https://cdn.jsdelivr.net https://unpkg.com",
-    "connect-src 'self' https://nominatim.openstreetmap.org",
+    "connect-src 'self' https://nominatim.openstreetmap.org https://cdn.jsdelivr.net https://unpkg.com",
     `frame-ancestors ${allowedIframeDomains}`
   ];
   
@@ -69,14 +71,65 @@ app.use((req, res, next) => {
 });
 
 // Helper function to load data fresh from files
-function loadDataFromFile(filePath) {
+function loadDataFromFile(relPath, opts) {
+    const optional = !!(opts && opts.optional);
+    const filePath = path.join(__dirname, String(relPath).replace(/^\.\/+/, ''));
     try {
         const data = fs.readFileSync(filePath, 'utf8');
         return JSON.parse(data);
     } catch (error) {
+        if (optional && error && error.code === 'ENOENT') {
+            return [];
+        }
         console.error(`Error loading data from ${filePath}:`, error);
         return [];
     }
+}
+
+function parseGeoNumber(v) {
+    if (v == null) return NaN;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
+    const s = String(v).trim();
+    if (s === '') return NaN;
+    const n = Number.parseFloat(s);
+    return Number.isFinite(n) ? n : NaN;
+}
+
+function isValidLonLat(lat, lon) {
+    return (
+        Number.isFinite(lat) &&
+        Number.isFinite(lon) &&
+        Math.abs(lat) <= 90 &&
+        Math.abs(lon) <= 180
+    );
+}
+
+function linacRowHasValidCoords(linac) {
+    const lat = parseGeoNumber(linac.Latitude);
+    const lon = parseGeoNumber(linac.Longitude);
+    return isValidLonLat(lat, lon);
+}
+
+function walmartRowHasValidCoords(w) {
+    const lat = parseGeoNumber(w.latitude);
+    const lon = parseGeoNumber(w.longitude);
+    return isValidLonLat(lat, lon);
+}
+
+/**
+ * OSRM routing for “nearest LINAC” reachability across state lines for the contiguous / connected road network.
+ * Alaska, Hawaii, and Puerto Rico are excluded when the **market** state is mainland: distances to those centers cannot
+ * represent plausible sub-hour contiguous driving tests. Markets in AK, HI, or PR use **in-state** LINACs only.
+ */
+const OSRM_BORDER_ISOLATED_STATES = new Set(['AK', 'HI', 'PR']);
+
+function linacRowsForDriveTimeOsrm(marketStateAbbr, linacLocations) {
+    if (OSRM_BORDER_ISOLATED_STATES.has(marketStateAbbr)) {
+        return linacLocations.filter((l) => linacRowHasValidCoords(l) && l.States === marketStateAbbr);
+    }
+    return linacLocations.filter(
+        (l) => linacRowHasValidCoords(l) && !OSRM_BORDER_ISOLATED_STATES.has(l.States)
+    );
 }
 
 // Add state abbreviation mapping
@@ -149,14 +202,14 @@ app.get('/', (req, res) => {
 
 // API Routes
 app.get('/api/cities', (req, res) => {
-    const cityCenters = loadDataFromFile('./src/data/city-centers.json');
+    const cityCenters = loadDataFromFile('./src/data/city-centers.json', { optional: true });
     const cities = [...new Set(cityCenters.map(location => location.Cities))].sort();
     res.json(cities);
 });
 
 app.get('/api/map-data', (req, res) => {
     const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
-    const cityCenters = loadDataFromFile('./src/data/city-centers.json');
+    const cityCenters = loadDataFromFile('./src/data/city-centers.json', { optional: true });
     const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
     
     console.log(`[Server] Loading fresh data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs`);
@@ -172,9 +225,7 @@ app.get('/api/map-data', (req, res) => {
     
     // Filter city centers and LINAC locations based on city
     let filteredCityCenters = cityCenters;
-    let filteredLinacs = linacLocations.filter(location => 
-        location.Latitude && location.Longitude
-    );
+    let filteredLinacs = linacLocations.filter(linacRowHasValidCoords);
 
     if (!isInitialLoad && city && city !== 'all') {
         filteredCityCenters = cityCenters.filter(location => location.Cities === city);
@@ -189,44 +240,68 @@ app.get('/api/map-data', (req, res) => {
     res.json(result);
 });
 
-app.get('/api/metrics', async (req, res) => {
-    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
-    const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
-    
-    console.log(`[Server] Metrics API - Loading data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs`);
-    
-    const stateAbbr = req.query.state;
-    const radius = parseFloat(req.query.radius) || 35;
-    const stateWalmarts = walmartLocations.filter(w => w.state === stateAbbr);
-    const validLinacs = linacLocations.filter(linac => linac.Latitude && linac.Longitude);
-    
-    console.log(`[Server] Calculating metrics for state ${stateAbbr} with radius ${radius} miles`);
-    console.log(`[Server] State has ${stateWalmarts.length} Walmart locations and there are ${validLinacs.length} valid LINAC centers`);
-    
+/** Parallel US aggregation batches (avoid OSRM/demo overload); each batch still small vs one national matrix. */
+const US_METRICS_STATE_CONCURRENCY = Math.min(
+    24,
+    Math.max(1, Number.parseInt(process.env.US_METRICS_STATE_CONCURRENCY || '4', 10) || 4)
+);
+
+/**
+ * Drive-time “gap” counts (first column): OSRM toward LINAC rows that honor cross-state borders —
+ * continental markets see all LINAC anchors except AK/HI/PR; isolated markets see only in-state LINACs.
+ * Inventory totals (stores / LINAC centers / LINAC counts) remain state-scoped in the caller.
+ */
+async function computeMetricsForStateAbbrev(
+    stateAbbr,
+    walmartLocations,
+    linacLocations,
+    driveTimeThresholdSeconds,
+    AVG_DRIVE_MPH
+) {
+    const stateWalmarts = walmartLocations.filter((w) => w.state === stateAbbr);
+    const validLinacsForOsrmDest = linacRowsForDriveTimeOsrm(stateAbbr, linacLocations);
+    const walmartsWithCoordsForOsrm = stateWalmarts.filter(walmartRowHasValidCoords);
+
+    const needsOsrm = validLinacsForOsrmDest.length > 0 && walmartsWithCoordsForOsrm.length > 0;
+
+    let durationsMatrix = null;
+    if (needsOsrm) {
+        durationsMatrix = await getDriveTimes(walmartsWithCoordsForOsrm, validLinacsForOsrmDest);
+    }
+
+    const radiusMilesForDisplay = (driveTimeThresholdSeconds / 3600) * AVG_DRIVE_MPH;
+
+    console.log(
+        `[Server] Calculating metrics for state ${stateAbbr}: drive-time threshold ${Math.round(driveTimeThresholdSeconds)}s (~${radiusMilesForDisplay.toFixed(1)} mi at ${AVG_DRIVE_MPH} mph map approx only)`
+    );
+    console.log(
+        `[Server] State has ${stateWalmarts.length} Walmart locations; ${validLinacsForOsrmDest.length} LINAC rows in OSRM destination set (cross-border except AK/HI/PR isolated)`
+    );
+
     let walmartsOutsideCount = 0;
     let walmartsWithinCount = 0;
     let walmartsInvalidCount = 0;
 
+    if (needsOsrm) {
+        console.log(`[Server] Reachability OSRM threshold ${driveTimeThresholdSeconds}s (any qualifying anchor column)`);
+    }
+
+    let rowIndex = 0;
     for (const walmart of stateWalmarts) {
-        if (!walmart.latitude || !walmart.longitude) {
+        if (!walmartRowHasValidCoords(walmart)) {
             walmartsOutsideCount++;
             walmartsInvalidCount++;
             continue;
         }
 
         let isWithinRange = false;
-        for (const linac of validLinacs) {
-            const distance = calculateDistance(
-                parseFloat(walmart.latitude),
-                parseFloat(walmart.longitude),
-                parseFloat(linac.Latitude),
-                parseFloat(linac.Longitude)
-            );
 
-            if (distance <= radius) {
-                isWithinRange = true;
-                break;
-            }
+        if (needsOsrm) {
+            const row = durationsMatrix[rowIndex];
+            rowIndex += 1;
+            isWithinRange = Array.isArray(row) && row.some(
+                (seconds) => seconds != null && seconds <= driveTimeThresholdSeconds
+            );
         }
 
         if (!isWithinRange) {
@@ -236,23 +311,115 @@ app.get('/api/metrics', async (req, res) => {
         }
     }
 
-    const totalWalmarts = stateWalmarts.length;
-    const stateLinacs = linacLocations.filter(center => center.States === stateAbbr);
-    const totalCenters = stateLinacs.length; // Each object represents one center
+    const stateLinacs = linacLocations.filter((center) => center.States === stateAbbr);
+    const totalCenters = stateLinacs.length;
     let totalLinacs = 0;
-    stateLinacs.forEach(center => {
-        totalLinacs += parseInt(center['Number of LINACs']) || 0;
+    stateLinacs.forEach((center) => {
+        totalLinacs += parseInt(center['Number of LINACs'], 10) || 0;
     });
-    
-    console.log(`[Server] Metrics results: ${walmartsOutsideCount} Walmarts outside range, ${walmartsWithinCount} within range, ${walmartsInvalidCount} invalid coordinates`);
+
+    console.log(`[Server] Metrics results (${stateAbbr}): ${walmartsOutsideCount} Walmarts outside range, ${walmartsWithinCount} within range, ${walmartsInvalidCount} invalid coordinates`);
     console.log(`[Server] State ${stateAbbr} has ${totalCenters} LINAC centers with ${totalLinacs} total LINACs`);
 
-    res.json({
+    return {
         walmartsOutsideRange: walmartsOutsideCount,
-        totalWalmarts: totalWalmarts,
-        cityCentersWithinRange: totalCenters, // This is a legacy field name
+        totalWalmarts: stateWalmarts.length,
+        cityCentersWithinRange: totalCenters,
         linacsWithinRange: totalLinacs
-    });
+    };
+}
+
+app.get('/api/metrics', async (req, res) => {
+    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
+    const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
+
+    console.log(`[Server] Metrics API - Loading data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs`);
+
+    const stateAbbr = req.query.state;
+    const AVG_DRIVE_MPH = 50;
+
+    /** Prefer driveTimeMinutes (true OSRM ceiling). Legacy ?radius= miles uses 50 mph proxy. Default 60 min. */
+    let driveTimeThresholdSeconds;
+    const dmRaw = req.query.driveTimeMinutes;
+    const radiusRaw = req.query.radius;
+    if (dmRaw != null && dmRaw !== '') {
+        const dm = parseFloat(dmRaw);
+        const minutes = Number.isFinite(dm) ? dm : 60;
+        driveTimeThresholdSeconds = minutes * 60;
+    } else if (radiusRaw != null && radiusRaw !== '') {
+        const radiusMiles = parseFloat(radiusRaw);
+        const miles = Number.isFinite(radiusMiles) ? radiusMiles : 35;
+        driveTimeThresholdSeconds = (miles / AVG_DRIVE_MPH) * 3600;
+    } else {
+        driveTimeThresholdSeconds = 3600;
+    }
+
+    if (!stateAbbr || stateAbbr === '') {
+        return res.status(400).json({ error: 'Missing state', message: 'Query parameter state is required (e.g. CA or US).' });
+    }
+
+    /** National row: sum state-level metrics (same OSRM semantics as single-state queries). No single huge Table call. */
+    if (stateAbbr === 'US') {
+        const codes = [...new Set(walmartLocations.map((w) => w.state).filter(Boolean))].sort();
+        const totals = {
+            walmartsOutsideRange: 0,
+            totalWalmarts: 0,
+            cityCentersWithinRange: 0,
+            linacsWithinRange: 0
+        };
+
+        console.log(
+            `[Server] US metrics — aggregating ${codes.length} state-level OSRM runs (parallelism ${US_METRICS_STATE_CONCURRENCY})`
+        );
+
+        try {
+            for (let i = 0; i < codes.length; i += US_METRICS_STATE_CONCURRENCY) {
+                const chunk = codes.slice(i, i + US_METRICS_STATE_CONCURRENCY);
+                const chunkResults = await Promise.all(
+                    chunk.map((code) =>
+                        computeMetricsForStateAbbrev(
+                            code,
+                            walmartLocations,
+                            linacLocations,
+                            driveTimeThresholdSeconds,
+                            AVG_DRIVE_MPH
+                        )
+                    )
+                );
+                for (const m of chunkResults) {
+                    totals.walmartsOutsideRange += m.walmartsOutsideRange;
+                    totals.totalWalmarts += m.totalWalmarts;
+                    totals.cityCentersWithinRange += m.cityCentersWithinRange;
+                    totals.linacsWithinRange += m.linacsWithinRange;
+                }
+            }
+            console.log('[Server] US aggregate metrics computed from state sums.');
+            return res.json(totals);
+        } catch (err) {
+            console.error('[Server] OSRM metrics failed (US aggregate):', err.message || err);
+            return res.status(503).json({
+                error: 'Drive-time routing unavailable',
+                message: err.message || String(err)
+            });
+        }
+    }
+
+    try {
+        const result = await computeMetricsForStateAbbrev(
+            stateAbbr,
+            walmartLocations,
+            linacLocations,
+            driveTimeThresholdSeconds,
+            AVG_DRIVE_MPH
+        );
+        return res.json(result);
+    } catch (err) {
+        console.error('[Server] OSRM metrics failed:', err.message || err);
+        return res.status(503).json({
+            error: 'Drive-time routing unavailable',
+            message: err.message || String(err)
+        });
+    }
 });
 
 app.get('/api/states', (req, res) => {
@@ -345,37 +512,192 @@ app.get('/api/state-boundary/:state', async (req, res) => {
     }
 });
 
-// Start the server
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    if (process.env.PORT) {
-        console.log(`Ready for iframe embedding on Render`);
+// -----------------------------------------------------------------------------
+// OSRM Table API — drive durations (metrics use this exclusively; no Haversine fallback).
+// -----------------------------------------------------------------------------
+const OSRM_TABLE_BASE_URL = 'http://router.project-osrm.org/table/v1/driving';
+
+/**
+ * Max coordinates encoded in ONE Table GET URL path. Official OSRM allows ~100; nginx on the public
+ * demo often returns **414 URI Too Long** well before coordinate-count limits — keep shards small.
+ * Override with OSRM_MAX_COORDS_PER_REQUEST (clamp 40–140; try raising only if your host allows long URIs).
+ */
+const _envMaxCoords = Number.parseInt(process.env.OSRM_MAX_COORDS_PER_REQUEST || '96', 10);
+const OSRM_MAX_COORDINATES_PER_REQUEST = Number.isFinite(_envMaxCoords)
+    ? Math.min(140, Math.max(40, _envMaxCoords))
+    : 96;
+
+const OSRM_CACHE_ENABLED = !/^0|false|no$/i.test(String(process.env.OSRM_CACHE_ENABLED || '1'));
+const OSRM_CACHE_TTL_SEC = Number.parseInt(process.env.OSRM_CACHE_TTL_SECONDS || '604800', 10); // default 7d
+/** Omit or `-1`: no max (needed for nationwide OSRM shards). Set OSRM_CACHE_MAX_KEYS to cap keys if memory is tight. */
+const _envOsrmMaxKeys = process.env.OSRM_CACHE_MAX_KEYS;
+let OSRM_CACHE_MAX_KEYS = -1;
+if (_envOsrmMaxKeys != null && String(_envOsrmMaxKeys).trim() !== '') {
+    const n = Number.parseInt(String(_envOsrmMaxKeys), 10);
+    if (Number.isFinite(n) && n > 0) {
+        OSRM_CACHE_MAX_KEYS = Math.min(n, 10_000_000);
     }
+}
+
+/** In-memory OSRM Table response cache (per coordinate batch); avoids repeat HTTP for identical shards. */
+const osrmTableCache = new NodeCache({
+    stdTTL: OSRM_CACHE_TTL_SEC,
+    maxKeys: OSRM_CACHE_MAX_KEYS,
+    useClones: false
 });
 
-// Helper function for distance calculation
-function calculateDistance(lat1, lon1, lat2, lon2) {
-    if (!lat1 || !lon1 || !lat2 || !lon2) {
-        return Number.MAX_VALUE;
+function buildOsrmTableCacheKey(coordPathSegment, sourcesParam, destParam) {
+    return crypto
+        .createHash('sha256')
+        .update(`${coordPathSegment}|${sourcesParam}|${destParam}`, 'utf8')
+        .digest('hex');
+}
+
+/**
+ * Single OSRM Table call: durations[i][j] = seconds from source i to destination j (or null).
+ * Coordinates path uses lon,lat (OSRM order). Walmart JSON uses latitude/longitude (lowercase);
+ * LINAC JSON uses Latitude/Longitude — read those fields explicitly below.
+ */
+async function getDriveTimesSingle(sourceRows, destRows) {
+    const coords = [];
+
+    for (let i = 0; i < sourceRows.length; i++) {
+        const w = sourceRows[i];
+        const lat = parseGeoNumber(w.latitude != null ? w.latitude : w.Latitude);
+        const lon = parseGeoNumber(w.longitude != null ? w.longitude : w.Longitude);
+        if (!isValidLonLat(lat, lon)) {
+            throw new Error(`Invalid Walmart coordinates at source index ${i}`);
+        }
+        coords.push(`${Number(lon.toFixed(5))},${Number(lat.toFixed(5))}`);
     }
-    
-    // Convert latitude and longitude from degrees to radians
-    const radLat1 = (Math.PI * lat1) / 180;
-    const radLon1 = (Math.PI * lon1) / 180;
-    const radLat2 = (Math.PI * lat2) / 180;
-    const radLon2 = (Math.PI * lon2) / 180;
-    
-    // Haversine formula
-    const dLat = radLat2 - radLat1;
-    const dLon = radLon2 - radLon1;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(radLat1) * Math.cos(radLat2) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    
-    // Radius of the Earth in miles
-    const R = 3958.8; // miles
-    
-    // Calculate the distance
-    return R * c;
+
+    for (let j = 0; j < destRows.length; j++) {
+        const linac = destRows[j];
+        const lat = parseGeoNumber(linac.Latitude != null ? linac.Latitude : linac.latitude);
+        const lon = parseGeoNumber(linac.Longitude != null ? linac.Longitude : linac.longitude);
+        if (!isValidLonLat(lat, lon)) {
+            throw new Error(`Invalid LINAC coordinates at destination index ${j}`);
+        }
+        coords.push(`${Number(lon.toFixed(5))},${Number(lat.toFixed(5))}`);
+    }
+
+    const coordPathSegment = coords.join(';');
+    const numSources = sourceRows.length;
+    const sourcesParam = [...Array(numSources).keys()].join(';');
+    const destParam = [...Array(destRows.length).keys()].map((k) => numSources + k).join(';');
+    const url = `${OSRM_TABLE_BASE_URL}/${coordPathSegment}?sources=${sourcesParam}&destinations=${destParam}&annotations=duration`;
+
+    const cacheKey = buildOsrmTableCacheKey(coordPathSegment, sourcesParam, destParam);
+    if (OSRM_CACHE_ENABLED) {
+        const hit = osrmTableCache.get(cacheKey);
+        if (hit !== undefined) {
+            return hit;
+        }
+    }
+
+    const res = await axios.get(url, { timeout: 120000, validateStatus: () => true });
+    const data = res.data;
+
+    if (res.status !== 200 || !data || data.code !== 'Ok' || !Array.isArray(data.durations)) {
+        throw new Error(`OSRM Table error (${res.status}): ${data && data.code ? data.code : 'invalid body'}`);
+    }
+
+    const { durations } = data;
+    if (durations.length !== numSources) {
+        throw new Error('OSRM durations row dimension mismatch');
+    }
+    for (let r = 0; r < durations.length; r++) {
+        if (!Array.isArray(durations[r]) || durations[r].length !== destRows.length) {
+            throw new Error('OSRM durations column dimension mismatch');
+        }
+    }
+
+    if (OSRM_CACHE_ENABLED) {
+        try {
+            osrmTableCache.set(cacheKey, durations);
+        } catch (err) {
+            console.warn('[OSRM] Table cache write failed — metrics OK, cache skipped:', err.message || err);
+        }
+    }
+
+    return durations;
+}
+
+/**
+ * Build full duration matrix sources × destinations, batching to respect OSRM_MAX_COORDINATES_PER_REQUEST.
+ * Tile when sources+destinations exceed OSRM_MAX_COORDINATES_PER_REQUEST (URL-safe for public demo),
+ * preserving min duration where a grid cell is accidentally covered twice.
+ */
+async function getDriveTimes(sources, destinations) {
+    if (sources.length === 0) {
+        return [];
+    }
+    if (destinations.length === 0) {
+        return [];
+    }
+
+    const MAX = OSRM_MAX_COORDINATES_PER_REQUEST;
+    const nRows = sources.length;
+    const nCols = destinations.length;
+
+    if (nRows + nCols <= MAX) {
+        return await getDriveTimesSingle(sources, destinations);
+    }
+
+    const matrix = sources.map(() => new Array(nCols).fill(null));
+
+    /** Keep source shards small — longitudes/latitudes in the URL add up faster than counting coordinates. */
+    const sShardCap = Math.min(36, MAX - 1);
+    const sShard = Math.min(Math.max(1, nRows), sShardCap);
+    const dShard = Math.min(nCols, MAX - sShard);
+
+    for (let si = 0; si < nRows; si += sShard) {
+        const sPart = sources.slice(si, si + sShard);
+        for (let dj = 0; dj < nCols; dj += dShard) {
+            const dPart = destinations.slice(dj, dj + dShard);
+            if (sPart.length + dPart.length > MAX) {
+                throw new Error('OSRM shard geometry error');
+            }
+            const sub = await getDriveTimesSingle(sPart, dPart);
+            for (let i = 0; i < sPart.length; i++) {
+                for (let j = 0; j < dPart.length; j++) {
+                    const val = sub[i][j];
+                    if (val == null) continue;
+                    const prev = matrix[si + i][dj + j];
+                    if (prev == null || val < prev) {
+                        matrix[si + i][dj + j] = val;
+                    }
+                }
+            }
+        }
+    }
+
+    return matrix;
+}
+
+// Start the server when launched directly (`node server.js`), not when required by tests.
+module.exports = {
+    app,
+    linacRowsForDriveTimeOsrm,
+    linacRowHasValidCoords,
+    walmartRowHasValidCoords
+};
+
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+        console.log(`[OSRM] Table batch size (coordinates per GET): ${OSRM_MAX_COORDINATES_PER_REQUEST}`);
+        if (OSRM_CACHE_ENABLED) {
+            const maxKeysLabel =
+                OSRM_CACHE_MAX_KEYS === -1 ? 'maxKeys unlimited' : `maxKeys ${OSRM_CACHE_MAX_KEYS}`;
+            console.log(
+                `[OSRM] Table cache enabled — TTL ${OSRM_CACHE_TTL_SEC}s, ${maxKeysLabel} (env: OSRM_CACHE_ENABLED, OSRM_CACHE_TTL_SECONDS, OSRM_CACHE_MAX_KEYS)`
+            );
+        } else {
+            console.log('[OSRM] Table cache disabled (OSRM_CACHE_ENABLED=0|false)');
+        }
+        if (process.env.PORT) {
+            console.log(`Ready for iframe embedding on Render`);
+        }
+    });
 }
