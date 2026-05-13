@@ -2,6 +2,9 @@
 let map;
 let walmartMarkers = [];
 let linacMarkers = [];
+let hospitalMarkers = [];
+/** Purple ring markers — OSRM systemic-gap Walmarts; not affected by Hide Walmarts heuristic. */
+let systemicGapMarkers = [];
 let stateLayer;
 let usBoundaryLayer;
 let legendControl; // Add global reference to legend control
@@ -15,6 +18,37 @@ function getDriveTimeMinutes() {
     if (!el) return 60;
     const v = parseFloat(el.value, 10);
     return Number.isFinite(v) ? v : 60;
+}
+
+/** Shared dashboard modal grid (LINAC gaps + viable/systemic splits + inventory). */
+function formatDashboardCardsHTML(metrics, minutes) {
+    const m = metrics || {};
+    return `
+        <div class="metric-card">
+            <div class="metric-value">${m.walmartsOutsideRange || 0}</div>
+            <div class="metric-label">No LINAC within ${minutes} min (OSRM)</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value">${m.viableGapWalmarts || 0}</div>
+            <div class="metric-label">Viable gap — no LINAC, general acute hospital ≤ ${minutes} min (same OSRM rules)</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value">${m.systemicGapWalmarts || 0}</div>
+            <div class="metric-label">Systemic gap — no LINAC, no general acute hospital reachable</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value">${m.totalWalmarts || 0}</div>
+            <div class="metric-label">Total Walmarts in State</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value">${m.cityCentersWithinRange || 0}</div>
+            <div class="metric-label">LINAC Centers in State</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value">${m.linacsWithinRange || 0}</div>
+            <div class="metric-label">Total LINACs in State</div>
+        </div>
+    `;
 }
 
 /** Pan/zoom to a point when a location is selected from the map or list (no drive-time circle). */
@@ -37,6 +71,99 @@ const redMarkerIcon = L.icon({
     iconAnchor: [6, 20],
     popupAnchor: [1, -17]
 });
+
+const yellowMarkerIcon = L.icon({
+    iconUrl: '/images/markers/marker-icon-yellow.png',
+    iconSize: [12, 20],
+    iconAnchor: [6, 20],
+    popupAnchor: [1, -17]
+});
+
+function escapePopupText(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/"/g, '&quot;');
+}
+
+function clearSystemicGapMarkers() {
+    if (map) {
+        systemicGapMarkers.forEach((layer) => {
+            try {
+                map.removeLayer(layer);
+            } catch (e) {
+                /* noop */
+            }
+        });
+    }
+    systemicGapMarkers = [];
+}
+
+/**
+ * Purple rings — Walmart locations that are OSRM systemic gaps (no LINAC + no general acute hospital ≤ cutoff).
+ * Not affected by “Hide Walmarts” (that uses straight-line distance to LINAC markers only).
+ */
+function syncSystemicGapPinsFromMetrics(metrics) {
+    clearSystemicGapMarkers();
+    const st = document.getElementById('state')?.value;
+    if (!map || !st || st === 'US' || st === 'all') {
+        updateLegend();
+        return;
+    }
+    const minutes = getDriveTimeMinutes();
+    const pins = metrics && Array.isArray(metrics.systemicGapWalmartPins) ? metrics.systemicGapWalmartPins : [];
+    pins.forEach((p) => {
+        const lat = p.latitude;
+        const lng = p.longitude;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            return;
+        }
+        const cm = L.circleMarker([lat, lng], {
+            radius: 11,
+            weight: 3,
+            color: '#4a148c',
+            fillColor: '#e1bee7',
+            fillOpacity: 0.95
+        }).addTo(map);
+        try {
+            if (typeof cm.bringToFront === 'function') {
+                cm.bringToFront();
+            }
+        } catch (e) {
+            /* noop */
+        }
+        const addrParts = [];
+        if (p.street_address && String(p.street_address).trim()) {
+            addrParts.push(String(p.street_address).trim());
+        }
+        let cityLine = '';
+        const cty = p.city != null ? String(p.city).trim() : '';
+        const sta = p.state != null ? String(p.state).trim() : '';
+        if (cty && sta) {
+            cityLine = `${cty}, ${sta}`;
+        } else if (cty || sta) {
+            cityLine = cty || sta;
+        }
+        if (cityLine) {
+            addrParts.push(cityLine);
+        }
+        const addrHtml = addrParts.map(escapePopupText).join('<br>');
+        cm.bindPopup(
+            `<strong>Systemic gap</strong> (OSRM)<br>No LINAC and no general acute hospital within ${escapePopupText(minutes)} min.<br>${escapePopupText(p.name || '')}${addrHtml ? `<br>${addrHtml}` : ''}`
+        );
+        cm.on('click', () => {
+            flyMapTo(L.latLng(lat, lng), 14);
+            cm.openPopup();
+        });
+        systemicGapMarkers.push(cm);
+    });
+    if (pins.length > 0) {
+        console.log(
+            `[Map] ${pins.length} systemic-gap location(s) — purple rings (OSRM classification; unaffected by Hide Walmarts heuristic)`
+        );
+    }
+    updateLegend();
+}
 
 // Add state code to name mapping
 const stateNames = {
@@ -224,8 +351,9 @@ async function loadInitialMarkers() {
         
         // Create a counter for loaded markers
         let loadedMarkers = 0;
-        const totalMarkers = data.walmart.length + data.linac.length;
-        
+        const hospitalsRaw = Array.isArray(data.hospital) ? data.hospital : [];
+        const totalMarkers = data.walmart.length + data.linac.length + hospitalsRaw.length;
+
         // Add Walmart markers
         data.walmart.forEach(location => {
             if (!location.latitude || !location.longitude) {
@@ -306,7 +434,42 @@ async function loadInitialMarkers() {
             checkLoadingComplete(loadedMarkers, totalMarkers);
         });
 
+        hospitalsRaw.forEach((hospital) => {
+            const lat = parseFloat(String(hospital.LATITUDE));
+            const lon = parseFloat(String(hospital.LONGITUDE));
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+                loadedMarkers++;
+                checkLoadingComplete(loadedMarkers, totalMarkers);
+                return;
+            }
+            const latLng = L.latLng(lat, lon);
+            if (
+                isValidUSCoordinate(lat, lon) &&
+                (!usBoundaryLayer || usBoundaryLayer.getBounds().contains(latLng))
+            ) {
+                const marker = L.marker(latLng, {
+                    icon: yellowMarkerIcon
+                }).addTo(map);
+                marker.hospitalData = hospital;
+                marker.bindPopup(`
+                    <strong>General acute hospital</strong><br>
+                    ${hospital.NAME}<br>
+                    ${hospital.CITY}, ${hospital.STATE}
+                `);
+                marker.on('click', function () {
+                    flyMapTo(latLng, 12);
+                });
+                hospitalMarkers.push(marker);
+            }
+            loadedMarkers++;
+            checkLoadingComplete(loadedMarkers, totalMarkers);
+        });
+
+        console.log(
+            `[Map] Loaded from /api/map-data: ${data.walmart.length} Walmarts, ${data.linac.length} LINAC rows, general-acute hospitals ${hospitalsRaw.length} (NAICS 622110 OPEN; markers inside US polygon + bbox)`
+        );
         console.log(`Total LINAC Centers displayed on map (red markers): ${linacMarkers.length}`);
+        console.log(`Total general-acute hospitals displayed (yellow pins): ${hospitalMarkers.length}`);
         console.log(`LINAC entries with missing/invalid coordinates: ${missingCoordinates}`);
         console.log(`LINAC entries with coordinates outside US bounds: ${outsideUSBounds}`);
     } catch (error) {
@@ -361,28 +524,14 @@ function initializeEventListeners() {
                 const response = await fetch(`/api/metrics?${q}`);
                 const metrics = await parseJsonOrThrow(response);
                 console.log('[Frontend] Received metrics:', metrics);
-                
+
+                syncSystemicGapPinsFromMetrics(metrics);
+
                 if (!document.getElementById('dashboard-modal').classList.contains('d-none')) {
-                    const metricsHTML = `
-                        <div class="metric-card">
-                            <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
-                            <div class="metric-label">Walmarts with no LINAC within ${minutes} min drive (OSRM, incl. across state lines; AK, HI &amp; PR isolated)</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value">${metrics.totalWalmarts || 0}</div>
-                            <div class="metric-label">Total Walmarts in State</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value">${metrics.cityCentersWithinRange || 0}</div>
-                            <div class="metric-label">LINAC Centers in State</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value">${metrics.linacsWithinRange || 0}</div>
-                            <div class="metric-label">Total LINACs in State</div>
-                        </div>
-                    `;
-                    
-                    document.getElementById('modal-dashboard-metrics').innerHTML = metricsHTML;
+                    document.getElementById('modal-dashboard-metrics').innerHTML = formatDashboardCardsHTML(
+                        metrics,
+                        minutes
+                    );
                 }
                 
                 if (document.getElementById('metrics-table-body')) {
@@ -464,26 +613,11 @@ function initializeEventListeners() {
             );
             const metrics = await parseJsonOrThrow(response);
 
-            const metricsHTML = `
-                <div class="metric-card">
-                    <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
-                    <div class="metric-label">Walmarts with no LINAC within ${minutes} min drive (OSRM, incl. across state lines; AK, HI &amp; PR isolated)</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value">${metrics.totalWalmarts || 0}</div>
-                    <div class="metric-label">Total Walmarts in State</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value">${metrics.cityCentersWithinRange || 0}</div>
-                    <div class="metric-label">LINAC Centers in State</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value">${metrics.linacsWithinRange || 0}</div>
-                    <div class="metric-label">Total LINACs in State</div>
-                </div>
-            `;
-
-            document.getElementById('modal-dashboard-metrics').innerHTML = metricsHTML;
+            document.getElementById('modal-dashboard-metrics').innerHTML = formatDashboardCardsHTML(
+                metrics,
+                minutes
+            );
+            syncSystemicGapPinsFromMetrics(metrics);
         } catch (error) {
             console.error('Error fetching metrics:', error);
             const safe = String(error.message || error).replace(/</g, '&lt;');
@@ -550,10 +684,13 @@ function initializeEventListeners() {
 
 // Update clearMap function
 function clearMap() {
-    walmartMarkers.forEach(marker => marker.remove());
-    linacMarkers.forEach(marker => marker.remove());
+    walmartMarkers.forEach((marker) => marker.remove());
+    linacMarkers.forEach((marker) => marker.remove());
+    hospitalMarkers.forEach((marker) => marker.remove());
+    clearSystemicGapMarkers();
     walmartMarkers = [];
     linacMarkers = [];
+    hospitalMarkers = [];
 }
 
 // Update map markers
@@ -593,26 +730,7 @@ function displayMetrics(metrics) {
     
     if (metrics) {
         const minutes = getDriveTimeMinutes();
-        const metricsHTML = `
-            <div class="metric-card">
-                <div class="metric-value">${metrics.walmartsOutsideRange || 0}</div>
-                <div class="metric-label">Walmarts with no LINAC within ${minutes} min drive (OSRM, incl. across state lines; AK, HI &amp; PR isolated)</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-value">${metrics.totalWalmarts || 0}</div>
-                <div class="metric-label">Total Walmarts in State</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-value">${metrics.cityCentersWithinRange || 0}</div>
-                <div class="metric-label">LINAC Centers in State</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-value">${metrics.linacsWithinRange || 0}</div>
-                <div class="metric-label">Total LINACs in State</div>
-            </div>
-        `;
-
-        modalMetricsContainer.innerHTML = metricsHTML;
+        modalMetricsContainer.innerHTML = formatDashboardCardsHTML(metrics, minutes);
     } else {
         modalMetricsContainer.innerHTML = '';
     }
@@ -828,6 +946,10 @@ async function updateAnalysis() {
             marker.setOpacity(0);
             marker.closePopup();
         });
+        hospitalMarkers.forEach((marker) => {
+            marker.setOpacity(0);
+            marker.closePopup();
+        });
 
         if (state === 'US') {
             // Clear any existing state boundary
@@ -839,7 +961,8 @@ async function updateAnalysis() {
             // Show all markers for US view
             walmartMarkers.forEach(marker => marker.setOpacity(1));
             linacMarkers.forEach(marker => marker.setOpacity(1));
-            
+            hospitalMarkers.forEach((m) => m.setOpacity(1));
+
             // Set view to continental US
             map.setView([39.8283, -98.5795], 4);
 
@@ -864,6 +987,7 @@ async function updateAnalysis() {
             const metrics = await parseJsonOrThrow(metricsResponse);
 
             displayMetrics(metrics);
+            syncSystemicGapPinsFromMetrics(metrics);
         } else {
             // Load state boundary and wait for result
             const boundaryLoaded = await loadStateBoundary(state);
@@ -875,6 +999,7 @@ async function updateAnalysis() {
             // Show all markers, regardless of state boundaries
             walmartMarkers.forEach(marker => marker.setOpacity(1));
             linacMarkers.forEach(marker => marker.setOpacity(1));
+            hospitalMarkers.forEach((m) => m.setOpacity(1));
 
             // Get state metrics from server
             const minutes = getDriveTimeMinutes();
@@ -884,6 +1009,7 @@ async function updateAnalysis() {
             const metrics = await parseJsonOrThrow(response);
 
             displayMetrics(metrics);
+            syncSystemicGapPinsFromMetrics(metrics);
         }
 
         updateLocationList();
@@ -1144,6 +1270,14 @@ function createMetricsTable() {
                                     <div>No LINAC within ${minutes} min (OSRM)</div>
                                     <div class="small text-muted fw-normal mt-1 lh-sm">Incl. bordering states. Cross-border excludes AK, HI &amp; PR LINACs; those rows use in-state LINACs only.</div>
                                 </th>
+                                <th class="text-end">
+                                    <div>Viable gap</div>
+                                    <div class="small text-muted fw-normal mt-1 lh-sm">LINAC center with general acute hospital within ${minutes} min.</div>
+                                </th>
+                                <th class="text-end">
+                                    <div>Systemic gap</div>
+                                    <div class="small text-muted fw-normal mt-1 lh-sm">LINAC gap, no qualifying general acute hospital within specific driving time.</div>
+                                </th>
                                 <th class="text-end">Total<br>Walmarts</th>
                                 <th class="text-end">LINAC<br>Centers</th>
                                 <th class="text-end">Total<br>LINACs</th>
@@ -1151,7 +1285,7 @@ function createMetricsTable() {
                         </thead>
                         <tbody id="metrics-table-body">
                             <tr>
-                                <td colspan="5" class="text-center">
+                                <td colspan="7" class="text-center">
                                     <div class="spinner-border text-primary" role="status">
                                         <span class="visually-hidden">Loading...</span>
                                     </div>
@@ -1182,14 +1316,17 @@ function createMetricsTable() {
 function downloadMetricsCSV() {
     const minutes = getDriveTimeMinutes();
     const table = document.querySelector('.metrics-table');
-    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM cross-border excl AK HI PR anchors),Total Walmarts,LINAC Centers,Total LINACs\n`;
+    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM),Viable Gap (General acute hosp ${minutes} min),Systemic Gap,Total Walmarts,LINAC Centers,Total LINACs\n`;
 
     // Get all table rows
     const rows = table.querySelectorAll('tbody tr');
     
     // Convert each row to CSV
-    rows.forEach(row => {
+    rows.forEach((row) => {
         const cells = row.querySelectorAll('td');
+        if (cells.length < 7 || row.id === 'metrics-table-loading-banner') {
+            return;
+        }
         const rowData = Array.from(cells)
             .map(cell => {
                 // Remove commas from numbers and any special characters
@@ -1225,22 +1362,27 @@ function downloadMetricsJSON() {
     // Convert each row to a JSON object
     rows.forEach(row => {
         const cells = row.querySelectorAll('td');
-        if (cells.length >= 5) {
-            const state = cells[0].textContent.trim();
-            const walmartsOutsideRange = parseInt(cells[1].textContent.replace(/,/g, '')) || 0;
-            const totalWalmarts = parseInt(cells[2].textContent.replace(/,/g, '')) || 0;
-            const linacCenters = parseInt(cells[3].textContent.replace(/,/g, '')) || 0;
-            const totalLinacs = parseInt(cells[4].textContent.replace(/,/g, '')) || 0;
-            
-            jsonData.push({
-                state,
-                walmartsOutsideRange,
-                totalWalmarts,
-                linacCenters,
-                totalLinacs,
-                driveTimeMinutes: parseInt(minutes, 10)
-            });
+        if (cells.length < 7 || row.id === 'metrics-table-loading-banner') {
+            return;
         }
+        const state = cells[0].textContent.trim();
+        const walmartsOutsideRange = parseInt(cells[1].textContent.replace(/,/g, '')) || 0;
+        const viableGapWalmarts = parseInt(cells[2].textContent.replace(/,/g, '')) || 0;
+        const systemicGapWalmarts = parseInt(cells[3].textContent.replace(/,/g, '')) || 0;
+        const totalWalmarts = parseInt(cells[4].textContent.replace(/,/g, '')) || 0;
+        const linacCenters = parseInt(cells[5].textContent.replace(/,/g, '')) || 0;
+        const totalLinacs = parseInt(cells[6].textContent.replace(/,/g, '')) || 0;
+
+        jsonData.push({
+            state,
+            walmartsOutsideRange,
+            viableGapWalmarts,
+            systemicGapWalmarts,
+            totalWalmarts,
+            linacCenters,
+            totalLinacs,
+            driveTimeMinutes: parseInt(minutes, 10)
+        });
     });
     
     // Create and trigger download
@@ -1261,7 +1403,7 @@ function downloadMetricsJSON() {
 function metricsTableLoadingRow(doneStates, totalStates) {
     return `
             <tr id="metrics-table-loading-banner">
-                <td colspan="5" class="text-center py-2 text-muted bg-light border-bottom">
+                <td colspan="7" class="text-center py-2 text-muted bg-light border-bottom">
                     <div class="d-flex justify-content-center align-items-center gap-2 flex-wrap py-2">
                         <div class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></div>
                         <span>Loading state metrics (${doneStates} / ${totalStates})...</span>
@@ -1274,12 +1416,16 @@ function sumMetricsTotals(metricsList) {
     return metricsList.reduce(
         (acc, m) => ({
             walmartsOutsideRange: acc.walmartsOutsideRange + (m.walmartsOutsideRange || 0),
+            viableGapWalmarts: acc.viableGapWalmarts + (m.viableGapWalmarts || 0),
+            systemicGapWalmarts: acc.systemicGapWalmarts + (m.systemicGapWalmarts || 0),
             totalWalmarts: acc.totalWalmarts + (m.totalWalmarts || 0),
             cityCentersWithinRange: acc.cityCentersWithinRange + (m.cityCentersWithinRange || 0),
             linacsWithinRange: acc.linacsWithinRange + (m.linacsWithinRange || 0)
         }),
         {
             walmartsOutsideRange: 0,
+            viableGapWalmarts: 0,
+            systemicGapWalmarts: 0,
             totalWalmarts: 0,
             cityCentersWithinRange: 0,
             linacsWithinRange: 0
@@ -1295,6 +1441,8 @@ function renderMetricsRow(st, metrics, isStrong) {
         <tr${isStrong ? ' class="us-total-row"' : ''}>
             <td>${a}${st}${z}</td>
             <td class="text-end">${a}${(m.walmartsOutsideRange || 0).toLocaleString()}${z}</td>
+            <td class="text-end">${a}${(m.viableGapWalmarts || 0).toLocaleString()}${z}</td>
+            <td class="text-end">${a}${(m.systemicGapWalmarts || 0).toLocaleString()}${z}</td>
             <td class="text-end">${a}${(m.totalWalmarts || 0).toLocaleString()}${z}</td>
             <td class="text-end">${a}${(m.cityCentersWithinRange || 0).toLocaleString()}${z}</td>
             <td class="text-end">${a}${(m.linacsWithinRange || 0).toLocaleString()}${z}</td>
@@ -1322,7 +1470,7 @@ async function populateTableData() {
         console.log(`[Table] OSRM reachability per state (${minutes} min; cross-border contiguous, AK/HI/PR isolated). US row = sum.`);
 
         let tableRows = '';
-        /** @type {{ walmartsOutsideRange: number, totalWalmarts: number, cityCentersWithinRange: number, linacsWithinRange: number }[]} */
+        /** @type {{ walmartsOutsideRange: number, viableGapWalmarts?: number, systemicGapWalmarts?: number, totalWalmarts: number, cityCentersWithinRange: number, linacsWithinRange: number }[]} */
         const metricsForTotals = [];
 
         tableBody.innerHTML = metricsTableLoadingRow(0, states.length);
@@ -1351,12 +1499,20 @@ async function populateTableData() {
         const usTotals = sumMetricsTotals(metricsForTotals);
 
         tableBody.innerHTML = renderMetricsRow('United States (sum)', usTotals, true) + tableRows;
+
+        const sample = metricsForTotals[0];
+        if (sample && !('viableGapWalmarts' in sample)) {
+            console.warn(
+                '[Table] /api/metrics response missing viableGapWalmarts — restart Node with latest server.js (old process omits gap split). Hard-refresh browser (Ctrl+F5).'
+            );
+        }
+
         console.log('[Table] Metrics table ready (US row summed from states).');
     } catch (error) {
         console.error('Error loading table metrics:', error);
         tableBody.innerHTML = `
             <tr>
-                <td colspan="5" class="text-center text-danger">
+                <td colspan="7" class="text-center text-danger">
                     Error loading metrics: ${error.message}
                 </td>
             </tr>
@@ -1415,6 +1571,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Update getLegendHTML function
 function getLegendHTML() {
+    const hospitalLegend = `
+            <div>
+                <img src="/images/markers/marker-icon-yellow.png" alt="Hospital">
+                General acute hospitals
+            </div>`;
+    const systemicLegend = `
+            <div>
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style="flex-shrink:0">
+                    <circle cx="7" cy="7" r="5.5" fill="#e1bee7" stroke="#4a148c" stroke-width="2"/>
+                </svg>
+                Systemic gap (OSRM)
+            </div>`;
+    const tail = `${hospitalLegend}${systemicLegend}`;
     if (walmartsHidden) {
         return `
             <div>
@@ -1425,9 +1594,10 @@ function getLegendHTML() {
                 <img src="/images/markers/marker-icon-red.png" alt="LINAC">
                 LINAC Centers
             </div>
+            ${tail}
         `;
-    } else {
-        return `
+    }
+    return `
             <div>
                 <img src="/images/markers/marker-icon-blue.png" alt="Walmart">
                 Walmart Locations
@@ -1436,8 +1606,8 @@ function getLegendHTML() {
                 <img src="/images/markers/marker-icon-red.png" alt="LINAC">
                 LINAC Centers
             </div>
+            ${tail}
         `;
-    }
 }
 
 // Function to update legend

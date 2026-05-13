@@ -151,6 +151,12 @@ Constant **`OSRM_BORDER_ISOLATED_STATES = new Set(['AK','HI','PR'])`**. Function
 
 **Sources** remain always Walmart stores **`w.state === marketStateAbbr`**; only the **destination LINAC set** changes by this rule.
 
+### Hospitals (second Table matrix, map layer)
+
+Dataset **`src/data/hospital-locations.json`**: eligible hospitals are **`STATUS` OPEN**, **`NAICS_CODE`** **622110** (general medical and surgical — general acute care), with valid **`LATITUDE`** / **`LONGITUDE`**. They appear in **`/api/map-data`** as **`hospital`** and on the map as **yellow tear-drop pins** (`marker-icon-yellow.png`), matching Walmart/LINAC icon sizing.
+
+Metrics: **`viableGapWalmarts`** and **`systemicGapWalmarts`** split **LINAC-gap** Walmart locations that have **valid store coordinates**. After the LINAC **`durationsMatrix`** classification, **`getDriveTimes(LINAC-gap stores × hospital destinations)`** runs using the **same** **`driveTimeThresholdSeconds`**. **`hospitalRowsForDriveTimeOsrm`** applies the **identical AK / HI / PR destination isolation** rule on **`h.STATE`**. Rows with **`walmartsOutsideRange`** solely due to **invalid Walmart coordinates** appear **only** in **`walmartsOutsideRange`**; they are **not** included in **`viableGapWalmarts + systemicGapWalmarts`** (that sum equals LINAC-gap count among coord-valid stores in the market state).
+
 ---
 
 ## Repository layout
@@ -162,10 +168,12 @@ LINAC/
 ├── public/
 │   ├── index.html         # Shell UI: state, radius, buttons, map, modals
 │   ├── css/styles.css     # Layout and styling
-│   └── js/main.js         # Leaflet map, markers, analysis UX, metrics table
+│   ├── js/main.js         # Leaflet map, markers, analysis UX, metrics table
+│   └── images/markers/    # Pin sprites (blue Walmart, red LINAC, yellow hospital)
 ├── src/data/
 │   ├── walmart-locations.json   # Walmart records (state, address, lat/lng)
-│   └── linac-locations.json     # LINAC records (name, Cities, States, lat/lng, counts)
+│   ├── linac-locations.json     # LINAC records (name, Cities, States, lat/lng, counts)
+│   └── hospital-locations.json  # HIFLD-style hospitals (optional; OPEN general acute NAICS 622110 + coords)
 └── README.md               # Setup, security notes, usage
 ```
 
@@ -194,8 +202,8 @@ LINAC/
 | GET | `/` | Serves `public/index.html` |
 | GET | `/api/states` | Sorted unique `state` values from Walmart JSON |
 | GET | `/api/cities` | Unique `Cities` from `city-centers.json` (empty if file missing) |
-| GET | `/api/map-data` | Query: `radius`, `city`, `initial`. Returns `{ walmart, cityCenter, linac }`. Walmarts are always unfiltered; LINACs are filtered to rows with both coordinates; city centers filter when `initial` is not `true` and `city` is set. |
-| GET | `/api/metrics` | Query: **`state`** (abbr or **`US`**), **`driveTimeMinutes`** (preferred), optional legacy **`radius`** (miles, converted via 50 mph to seconds ceiling). Returns gap counts (**OSRM**), Walmart totals, and state LINAC inventory—see [OSRM Table service](#osrm-table-service). |
+| GET | `/api/map-data` | Query: `radius`, `city`, `initial`. Returns **`{ walmart, cityCenter, linac, hospital }`**. Hospitals: **OPEN**, **NAICS 622110** general acute, valid coords; Walmarts unfiltered; LINACs filtered to coord-valid rows. |
+| GET | `/api/metrics` | Query: **`state`**, **`driveTimeMinutes`** (or legacy **`radius`**). Adds **`viableGapWalmarts`** / **`systemicGapWalmarts`** using OSRM to **general acute (NAICS 622110)** OPEN hospitals (**same minutes**—see [OSRM Table service](#osrm-table-service)). **`systemicGapWalmartPins`**: **`{ latitude, longitude, name, … }[]`** aligned with **`systemicGapWalmarts`** for a single **`state`**; for **`state=US`**, **`[]`** (no merged pins). Used on the map for **Systemic gap (OSRM)** markers. |
 | GET | `/api/state-boundary/:state` | Returns `[{ geojson }]` from Nominatim for `US` or `"StateName, United States"`. |
 
 Static assets (HTML, JS, CSS, images) are served from `public/`.
@@ -207,7 +215,7 @@ Static assets (HTML, JS, CSS, images) are served from `public/`.
 ### Startup (`DOMContentLoaded` → `initializeApp`)
 
 1. **`initializeMap`** – Creates the Leaflet map, OSM layer, legend, fetches `/api/state-boundary/US`, draws the US outline, then **`loadInitialMarkers`**.  
-2. **`loadInitialMarkers`** – `GET /api/map-data?initial=true` with cache-busting; clears marker arrays; adds Walmart markers inside the US GeoJSON bounds; adds LINAC markers with US bounding-box validation; LINAC clicks **pan/zoom** the map (no drive-radius overlay).  
+2. **`loadInitialMarkers`** – `GET /api/map-data?initial=true` with cache-busting; clears marker arrays; adds Walmart markers inside the US GeoJSON bounds; LINAC (**red**) and general-acute hospital (**yellow**, same pin shape as WAL/LINAC) with US bounding-box validation; marker clicks **pan/zoom** the map.  
 3. **`populateStateDropdown`** – Loads states, prepends “United States” (`US`), default-selects `US`. Markers load from **`initializeMap`** (not from the dropdown handler).  
 4. **`initializeEventListeners`** – Drive-time slider, Run Analysis, toggles, dashboard, table view, modals.
 

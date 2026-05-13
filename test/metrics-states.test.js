@@ -89,18 +89,53 @@ describe(
                 );
 
                 const b = res.body;
-                for (const k of ['walmartsOutsideRange', 'totalWalmarts', 'cityCentersWithinRange', 'linacsWithinRange']) {
+                for (const k of [
+                    'walmartsOutsideRange',
+                    'viableGapWalmarts',
+                    'systemicGapWalmarts',
+                    'totalWalmarts',
+                    'cityCentersWithinRange',
+                    'linacsWithinRange'
+                ]) {
                     assert.ok(k in b, `missing ${k}`);
                     assert.equal(typeof b[k], 'number');
                     assert.ok(Number.isFinite(b[k]));
                 }
 
+                assert.ok(Array.isArray(b.systemicGapWalmartPins));
+                assert.equal(
+                    b.systemicGapWalmartPins.length,
+                    b.systemicGapWalmarts,
+                    'pin list length matches systemic count'
+                );
+
                 assert.equal(b.totalWalmarts, expected.totalWalmarts, 'total Walmart count');
                 assert.equal(b.cityCentersWithinRange, expected.cityCentersWithinRange, 'LINAC center count');
                 assert.equal(b.linacsWithinRange, expected.linacsWithinRange, 'LINAC unit sum');
 
+                assert.ok(b.viableGapWalmarts >= 0, 'viable non-negative');
+                assert.ok(b.systemicGapWalmarts >= 0, 'systemic non-negative');
+                assert.ok(b.viableGapWalmarts <= b.walmartsOutsideRange, 'viable ⊆ LINAC-gap');
+                assert.ok(b.systemicGapWalmarts <= b.walmartsOutsideRange, 'systemic ⊆ LINAC-gap');
+                assert.ok(
+                    b.viableGapWalmarts + b.systemicGapWalmarts <= b.walmartsOutsideRange,
+                    'viable + systemic ≤ LINAC gap (invalid-address stores not split)'
+                );
+
                 assert.ok(b.walmartsOutsideRange >= 0, 'outside non-negative');
                 assert.ok(b.walmartsOutsideRange <= b.totalWalmarts, 'outside cannot exceed stores in state');
+
+                const invalidInState =
+                    expected.totalWalmarts -
+                    walmartLocations.filter(
+                        (w) => w.state === stateAbbr && walmartRowHasValidCoords(w)
+                    ).length;
+
+                assert.equal(
+                    b.viableGapWalmarts + b.systemicGapWalmarts,
+                    b.walmartsOutsideRange - invalidInState,
+                    'viable + systemic equals LINAC gaps among coord-valid stores'
+                );
 
                 const validStores = walmartLocations.filter(
                     (w) => w.state === stateAbbr && walmartRowHasValidCoords(w)

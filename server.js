@@ -116,6 +116,23 @@ function walmartRowHasValidCoords(w) {
     return isValidLonLat(lat, lon);
 }
 
+/** Lightweight pin for systemic-gap visualization (validated coords). */
+function walmartGeoPinForApi(w) {
+    const lat = parseGeoNumber(w.latitude);
+    const lon = parseGeoNumber(w.longitude);
+    if (!isValidLonLat(lat, lon)) {
+        return null;
+    }
+    return {
+        latitude: lat,
+        longitude: lon,
+        name: w.name != null ? String(w.name) : '',
+        street_address: w.street_address != null ? String(w.street_address) : '',
+        city: w.city != null ? String(w.city) : '',
+        state: w.state != null ? String(w.state) : ''
+    };
+}
+
 /**
  * OSRM routing for “nearest LINAC” reachability across state lines for the contiguous / connected road network.
  * Alaska, Hawaii, and Puerto Rico are excluded when the **market** state is mainland: distances to those centers cannot
@@ -130,6 +147,48 @@ function linacRowsForDriveTimeOsrm(marketStateAbbr, linacLocations) {
     return linacLocations.filter(
         (l) => linacRowHasValidCoords(l) && !OSRM_BORDER_ISOLATED_STATES.has(l.States)
     );
+}
+
+function hospitalRowHasValidCoords(h) {
+    const lat = parseGeoNumber(h.LATITUDE);
+    const lon = parseGeoNumber(h.LONGITUDE);
+    return isValidLonLat(lat, lon);
+}
+
+/** NAICS 622110 — general medical & surgical hospitals only (excludes psych, specialty, rehab, etc.). */
+const HOSPITAL_NAICS_GENERAL_ACUTE = 622110;
+
+function hospitalGeneralAcuteNaics(h) {
+    const n = Number.parseInt(String(h.NAICS_CODE ?? '').trim(), 10);
+    return Number.isFinite(n) ? n : NaN;
+}
+
+/** Hospitals used for routing + map: OPEN + general acute care + valid coords. */
+function hospitalRowEligibleRoute(h) {
+    return (
+        hospitalRowHasValidCoords(h) &&
+        String(h.STATUS || '').toUpperCase() === 'OPEN' &&
+        hospitalGeneralAcuteNaics(h) === HOSPITAL_NAICS_GENERAL_ACUTE
+    );
+}
+
+/** Same AK / HI / PR destination isolation as LINAC Table anchors. */
+function hospitalRowsForDriveTimeOsrm(marketStateAbbr, hospitals) {
+    const eligible = hospitals.filter(hospitalRowEligibleRoute);
+    if (OSRM_BORDER_ISOLATED_STATES.has(marketStateAbbr)) {
+        return eligible.filter((h) => h.STATE === marketStateAbbr);
+    }
+    return eligible.filter((h) => !OSRM_BORDER_ISOLATED_STATES.has(h.STATE));
+}
+
+function geoLatLonFromRow(row) {
+    const lat = parseGeoNumber(
+        row.latitude != null ? row.latitude : row.Latitude != null ? row.Latitude : row.LATITUDE
+    );
+    const lon = parseGeoNumber(
+        row.longitude != null ? row.longitude : row.Longitude != null ? row.Longitude : row.LONGITUDE
+    );
+    return { lat, lon };
 }
 
 // Add state abbreviation mapping
@@ -211,8 +270,14 @@ app.get('/api/map-data', (req, res) => {
     const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
     const cityCenters = loadDataFromFile('./src/data/city-centers.json', { optional: true });
     const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
-    
-    console.log(`[Server] Loading fresh data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs`);
+    const hospitalLocations = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+    const hospitalsForClient = Array.isArray(hospitalLocations)
+        ? hospitalLocations.filter(hospitalRowEligibleRoute)
+        : [];
+
+    console.log(
+        `[Server] Loading fresh data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs, ${hospitalsForClient.length} general-acute OPEN hospitals (NAICS ${HOSPITAL_NAICS_GENERAL_ACUTE}, coords)`
+    );
     console.log(`[Server] First LINAC entry: ${JSON.stringify(linacLocations[0]).substring(0, 200)}`);
     console.log(`[Server] Last LINAC entry: ${JSON.stringify(linacLocations[linacLocations.length-1]).substring(0, 200)}`);
     
@@ -234,9 +299,10 @@ app.get('/api/map-data', (req, res) => {
     const result = {
         walmart: filteredWalmarts,
         cityCenter: filteredCityCenters,
-        linac: filteredLinacs
+        linac: filteredLinacs,
+        hospital: hospitalsForClient
     };
-    
+
     res.json(result);
 });
 
@@ -255,6 +321,7 @@ async function computeMetricsForStateAbbrev(
     stateAbbr,
     walmartLocations,
     linacLocations,
+    hospitalLocations,
     driveTimeThresholdSeconds,
     AVG_DRIVE_MPH
 ) {
@@ -286,6 +353,13 @@ async function computeMetricsForStateAbbrev(
         console.log(`[Server] Reachability OSRM threshold ${driveTimeThresholdSeconds}s (any qualifying anchor column)`);
     }
 
+    const hospitals = Array.isArray(hospitalLocations) ? hospitalLocations : [];
+    const validHospDestOsrm = hospitalRowsForDriveTimeOsrm(stateAbbr, hospitals);
+    console.log(
+        `[Server] Hospitals in OSRM destination set (general acute OPEN + border rule): ${validHospDestOsrm.length}`
+    );
+
+    const linacGapWalmartsValidCoords = [];
     let rowIndex = 0;
     for (const walmart of stateWalmarts) {
         if (!walmartRowHasValidCoords(walmart)) {
@@ -306,8 +380,41 @@ async function computeMetricsForStateAbbrev(
 
         if (!isWithinRange) {
             walmartsOutsideCount++;
+            linacGapWalmartsValidCoords.push(walmart);
         } else {
             walmartsWithinCount++;
+        }
+    }
+
+    let viableGapWalmarts = 0;
+    let systemicGapWalmarts = 0;
+    const systemicGapWalmartPins = [];
+
+    function pushPinForGapWalmart(w) {
+        const pin = walmartGeoPinForApi(w);
+        if (pin != null) {
+            systemicGapWalmartPins.push(pin);
+        }
+    }
+
+    if (linacGapWalmartsValidCoords.length > 0) {
+        if (validHospDestOsrm.length === 0) {
+            systemicGapWalmarts = linacGapWalmartsValidCoords.length;
+            linacGapWalmartsValidCoords.forEach(pushPinForGapWalmart);
+        } else {
+            const hospDurations = await getDriveTimes(linacGapWalmartsValidCoords, validHospDestOsrm);
+            for (let gi = 0; gi < linacGapWalmartsValidCoords.length; gi++) {
+                const row = hospDurations[gi];
+                const nearHospital =
+                    Array.isArray(row) &&
+                    row.some((seconds) => seconds != null && seconds <= driveTimeThresholdSeconds);
+                if (nearHospital) {
+                    viableGapWalmarts += 1;
+                } else {
+                    systemicGapWalmarts += 1;
+                    pushPinForGapWalmart(linacGapWalmartsValidCoords[gi]);
+                }
+            }
         }
     }
 
@@ -321,8 +428,23 @@ async function computeMetricsForStateAbbrev(
     console.log(`[Server] Metrics results (${stateAbbr}): ${walmartsOutsideCount} Walmarts outside range, ${walmartsWithinCount} within range, ${walmartsInvalidCount} invalid coordinates`);
     console.log(`[Server] State ${stateAbbr} has ${totalCenters} LINAC centers with ${totalLinacs} total LINACs`);
 
+    console.log(
+        `[Server] Gap split (${stateAbbr}): viable ${viableGapWalmarts}, systemic ${systemicGapWalmarts} (LINAC-gap valid-coord stores; OSRM minutes to nearest general-acute hospital)`
+    );
+
+    const gapValid = viableGapWalmarts + systemicGapWalmarts;
+    const linacOutsideValid = Math.max(0, walmartsOutsideCount - walmartsInvalidCount);
+    if (gapValid !== linacOutsideValid) {
+        console.warn(
+            `[Server] Gap split sanity (${stateAbbr}): viable+systemic=${gapValid}, linac-outside-valid=${linacOutsideValid}`
+        );
+    }
+
     return {
         walmartsOutsideRange: walmartsOutsideCount,
+        viableGapWalmarts,
+        systemicGapWalmarts,
+        systemicGapWalmartPins,
         totalWalmarts: stateWalmarts.length,
         cityCentersWithinRange: totalCenters,
         linacsWithinRange: totalLinacs
@@ -332,8 +454,11 @@ async function computeMetricsForStateAbbrev(
 app.get('/api/metrics', async (req, res) => {
     const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
     const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
+    const hospitalLocations = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
 
-    console.log(`[Server] Metrics API - Loading data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs`);
+    console.log(
+        `[Server] Metrics API - Loading data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs, hospitals file ${Array.isArray(hospitalLocations) ? hospitalLocations.length : 0} rows`
+    );
 
     const stateAbbr = req.query.state;
     const AVG_DRIVE_MPH = 50;
@@ -363,6 +488,9 @@ app.get('/api/metrics', async (req, res) => {
         const codes = [...new Set(walmartLocations.map((w) => w.state).filter(Boolean))].sort();
         const totals = {
             walmartsOutsideRange: 0,
+            viableGapWalmarts: 0,
+            systemicGapWalmarts: 0,
+            systemicGapWalmartPins: [],
             totalWalmarts: 0,
             cityCentersWithinRange: 0,
             linacsWithinRange: 0
@@ -381,6 +509,7 @@ app.get('/api/metrics', async (req, res) => {
                             code,
                             walmartLocations,
                             linacLocations,
+                            hospitalLocations,
                             driveTimeThresholdSeconds,
                             AVG_DRIVE_MPH
                         )
@@ -388,6 +517,8 @@ app.get('/api/metrics', async (req, res) => {
                 );
                 for (const m of chunkResults) {
                     totals.walmartsOutsideRange += m.walmartsOutsideRange;
+                    totals.viableGapWalmarts += m.viableGapWalmarts || 0;
+                    totals.systemicGapWalmarts += m.systemicGapWalmarts || 0;
                     totals.totalWalmarts += m.totalWalmarts;
                     totals.cityCentersWithinRange += m.cityCentersWithinRange;
                     totals.linacsWithinRange += m.linacsWithinRange;
@@ -409,6 +540,7 @@ app.get('/api/metrics', async (req, res) => {
             stateAbbr,
             walmartLocations,
             linacLocations,
+            hospitalLocations,
             driveTimeThresholdSeconds,
             AVG_DRIVE_MPH
         );
@@ -556,27 +688,25 @@ function buildOsrmTableCacheKey(coordPathSegment, sourcesParam, destParam) {
 /**
  * Single OSRM Table call: durations[i][j] = seconds from source i to destination j (or null).
  * Coordinates path uses lon,lat (OSRM order). Walmart JSON uses latitude/longitude (lowercase);
- * LINAC JSON uses Latitude/Longitude — read those fields explicitly below.
+ * LINAC JSON uses Latitude/Longitude; hospital JSON LATITUDE/LONGITUDE — unified via geoLatLonFromRow.
  */
 async function getDriveTimesSingle(sourceRows, destRows) {
     const coords = [];
 
     for (let i = 0; i < sourceRows.length; i++) {
         const w = sourceRows[i];
-        const lat = parseGeoNumber(w.latitude != null ? w.latitude : w.Latitude);
-        const lon = parseGeoNumber(w.longitude != null ? w.longitude : w.Longitude);
+        const { lat, lon } = geoLatLonFromRow(w);
         if (!isValidLonLat(lat, lon)) {
-            throw new Error(`Invalid Walmart coordinates at source index ${i}`);
+            throw new Error(`Invalid source coordinates at index ${i}`);
         }
         coords.push(`${Number(lon.toFixed(5))},${Number(lat.toFixed(5))}`);
     }
 
     for (let j = 0; j < destRows.length; j++) {
-        const linac = destRows[j];
-        const lat = parseGeoNumber(linac.Latitude != null ? linac.Latitude : linac.latitude);
-        const lon = parseGeoNumber(linac.Longitude != null ? linac.Longitude : linac.longitude);
+        const dest = destRows[j];
+        const { lat, lon } = geoLatLonFromRow(dest);
         if (!isValidLonLat(lat, lon)) {
-            throw new Error(`Invalid LINAC coordinates at destination index ${j}`);
+            throw new Error(`Invalid destination coordinates at index ${j}`);
         }
         coords.push(`${Number(lon.toFixed(5))},${Number(lat.toFixed(5))}`);
     }
@@ -680,7 +810,11 @@ module.exports = {
     app,
     linacRowsForDriveTimeOsrm,
     linacRowHasValidCoords,
-    walmartRowHasValidCoords
+    walmartRowHasValidCoords,
+    hospitalRowsForDriveTimeOsrm,
+    hospitalRowEligibleRoute,
+    hospitalGeneralAcuteNaics,
+    geoLatLonFromRow
 };
 
 if (require.main === module) {
