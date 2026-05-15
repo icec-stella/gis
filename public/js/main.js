@@ -94,6 +94,25 @@ function escapePopupText(s) {
         .replace(/"/g, '&quot;');
 }
 
+/**
+ * Find the blue Walmart marker whose source row matches a systemic-gap pin's coordinates.
+ * Both the marker (via marker.walmartData.latitude/longitude) and the pin originate from the
+ * same JSON row, so equality is exact in practice; the small epsilon is defensive.
+ */
+function findWalmartMarkerByCoords(lat, lng) {
+    const EPS = 1e-9;
+    for (const m of walmartMarkers) {
+        const w = m.walmartData;
+        if (!w) continue;
+        const wlat = Number(w.latitude);
+        const wlng = Number(w.longitude);
+        if (Math.abs(wlat - lat) < EPS && Math.abs(wlng - lng) < EPS) {
+            return m;
+        }
+    }
+    return null;
+}
+
 function clearSystemicGapMarkers() {
     if (map) {
         systemicGapMarkers.forEach((layer) => {
@@ -105,11 +124,32 @@ function clearSystemicGapMarkers() {
         });
     }
     systemicGapMarkers = [];
+
+    // Restore Walmart pins that were hidden specifically because a systemic-gap ring covered them.
+    // If the Hide Walmarts toggle is currently on, re-evaluate restored markers against its
+    // straight-line proximity rule — some may need to stay hidden by that separate logic.
+    const maxStraightLineMiles = walmartsHidden ? (getDriveTimeMinutes() / 60) * UI_AVG_MPH : 0;
+    walmartMarkers.forEach((marker) => {
+        if (!marker._hiddenBySystemicGap) return;
+        marker._hiddenBySystemicGap = false;
+        if (!walmartsHidden) {
+            marker.setOpacity(1);
+            return;
+        }
+        const isNearLinac = linacMarkers.some((linacMarker) => {
+            const distanceMi = marker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
+            return distanceMi <= maxStraightLineMiles;
+        });
+        marker.setOpacity(isNearLinac ? 0 : 1);
+    });
 }
 
 /**
- * Purple rings — Walmart locations that are OSRM systemic gaps (no LINAC + no general acute or critical access hospital ≤ cutoff).
- * Not affected by “Hide Walmarts” (that uses straight-line distance to LINAC markers only).
+ * Purple rings — Walmart locations that are OSRM systemic gaps (no LINAC + no general acute or
+ * critical access hospital ≤ cutoff). The ring is the authoritative symbol at these locations;
+ * the underlying blue Walmart pin is hidden to give every location exactly one visual marker
+ * (the Hide-Walmarts straight-line heuristic disagrees with OSRM at some locations, which
+ * previously left a stray blue pin inside some rings).
  */
 function syncSystemicGapPinsFromMetrics(metrics) {
     clearSystemicGapMarkers();
@@ -167,6 +207,14 @@ function syncSystemicGapPinsFromMetrics(metrics) {
             cm.openPopup();
         });
         systemicGapMarkers.push(cm);
+
+        // Suppress the blue Walmart pin at this location — the ring is the authoritative symbol.
+        const underlying = findWalmartMarkerByCoords(lat, lng);
+        if (underlying) {
+            underlying._hiddenBySystemicGap = true;
+            underlying.setOpacity(0);
+            underlying.closePopup();
+        }
     });
     if (pins.length > 0) {
         console.log(
@@ -1048,12 +1096,15 @@ function updateLocationList() {
         walmartMarkers.forEach(marker => {
             // Bucket by the store's declared state field — matches /api/metrics. Previously used
             // point-in-polygon, which silently disagreed with the dashboard on border / mislabeled rows.
+            // A ring-covered Walmart is suppressed on the map but still belongs in the sidebar list
+            // — its identity isn't lost, it's just visualized as a systemic-gap ring.
+            const isVisuallyPresent = marker.options.opacity !== 0 || marker._hiddenBySystemicGap;
             let shouldShow = false;
 
             if (selectedState === 'US') {
-                shouldShow = marker.options.opacity !== 0;
+                shouldShow = isVisuallyPresent;
             } else {
-                shouldShow = marker.walmartData && marker.walmartData.state === selectedState && marker.options.opacity !== 0;
+                shouldShow = marker.walmartData && marker.walmartData.state === selectedState && isVisuallyPresent;
             }
             
             if (shouldShow) {
@@ -1196,11 +1247,16 @@ function showAllWalmarts() {
     
     let processedCount = 0;
     
-    // Show all Walmart markers
+    // Show all Walmart markers — but keep ring-covered ones hidden (the purple ring is the
+    // authoritative symbol at those locations; we never want a stray blue pin inside a ring).
     walmartMarkers.forEach(marker => {
+        if (marker._hiddenBySystemicGap) {
+            processedCount++;
+            return;
+        }
         marker.setOpacity(1);
         processedCount++;
-        
+
         if (processedCount % 100 === 0) {
             console.log(`Processed ${processedCount}/${walmartMarkers.length} Walmart markers...`);
         }

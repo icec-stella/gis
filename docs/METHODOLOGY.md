@@ -228,22 +228,3 @@ A reviewer should weigh the following before drawing conclusions from the figure
 5. **Population proxy.** Walmart stores are used as population access proxies; this is a deliberate methodological choice driven by data availability and rural-population correlation, but it is not a substitute for census-based population analysis. Areas with Walmart presence and areas without are not analyzed equivalently.
 6. **OSRM driving profile.** The `driving` profile uses generic car-routing assumptions: no traffic, no time-of-day variation, and default speed assumptions on each road class. Real travel times will vary.
 7. **Filter sensitivity.** The 30-minute hospital threshold and the 20-bed floor are policy choices, not derived from this analysis. Both are isolated to single constants in code and can be varied to test sensitivity.
-
----
-
-## 11. Reproducibility checklist
-
-To reproduce a given metrics-table run, the following are required:
-
-| Parameter | Where set | Default |
-|---|---|---|
-| LINAC drive-time ceiling (`driveTimeMinutes`) | UI slider; passed as query parameter | 60 min |
-| Hospital backstop ceiling (`HOSPITAL_BACKSTOP_MINUTES`) | Server constant | 30 min |
-| Minimum hospital bed count (`HOSPITAL_MIN_BEDS`) | Server constant | 20 (strict `>`) |
-| Eligible hospital types (`ELIGIBLE_HOSPITAL_TYPES`) | Server constant | `{GENERAL ACUTE CARE, CRITICAL ACCESS}` |
-| Hospital status filter | Server logic | `STATUS = 'OPEN'` |
-| Cross-border isolated states (`OSRM_BORDER_ISOLATED_STATES`) | Server constant | `{AK, HI, PR}` |
-| OSRM router base URL | Server constant | `http://router.project-osrm.org/table/v1/driving` |
-| Data files | `src/data/` | `walmart-locations.json`, `linac-locations.json`, `hospital-locations.json` |
-
-Recording these eight parameters, plus the OSM extract vintage in use by whatever OSRM service was hit (the public demo or a self-hosted instance), is sufficient to reproduce any reported figure to within the noise of OSRM's road-network shortest-path search.
