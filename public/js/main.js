@@ -13,6 +13,13 @@ let walmartsHidden = false; // Track if Walmarts are being hidden
 /** Rough miles-per-hour for Walmart hide-toggle only (straight-line heuristic). Metrics use OSRM on the server. */
 const UI_AVG_MPH = 50;
 
+/**
+ * Fixed hospital backstop drive-time ceiling — must match server.js HOSPITAL_BACKSTOP_MINUTES.
+ * Used for table headers / CSV labels that render before any /api/metrics response arrives;
+ * live responses also carry it as `metrics.hospitalBackstopMinutes` (preferred where available).
+ */
+const HOSPITAL_BACKSTOP_MINUTES = 30;
+
 function getDriveTimeMinutes() {
     const el = document.getElementById('max-drive-minutes');
     if (!el) return 60;
@@ -23,6 +30,7 @@ function getDriveTimeMinutes() {
 /** Shared dashboard modal grid (LINAC gaps + viable/systemic splits + inventory). */
 function formatDashboardCardsHTML(metrics, minutes) {
     const m = metrics || {};
+    const hospMin = Number.isFinite(m.hospitalBackstopMinutes) ? m.hospitalBackstopMinutes : HOSPITAL_BACKSTOP_MINUTES;
     return `
         <div class="metric-card">
             <div class="metric-value">${m.walmartsOutsideRange || 0}</div>
@@ -30,11 +38,11 @@ function formatDashboardCardsHTML(metrics, minutes) {
         </div>
         <div class="metric-card">
             <div class="metric-value">${m.viableGapWalmarts || 0}</div>
-            <div class="metric-label">Viable gap — no LINAC, general acute hospital ≤ ${minutes} min (same OSRM rules)</div>
+            <div class="metric-label">Viable gap — no LINAC, general acute or critical access hospital ≤ ${hospMin} min (OSRM)</div>
         </div>
         <div class="metric-card">
             <div class="metric-value">${m.systemicGapWalmarts || 0}</div>
-            <div class="metric-label">Systemic gap — no LINAC, no general acute hospital reachable</div>
+            <div class="metric-label">Systemic gap — no LINAC, no general acute or critical access hospital within ${hospMin} min</div>
         </div>
         <div class="metric-card">
             <div class="metric-value">${m.totalWalmarts || 0}</div>
@@ -100,7 +108,7 @@ function clearSystemicGapMarkers() {
 }
 
 /**
- * Purple rings — Walmart locations that are OSRM systemic gaps (no LINAC + no general acute hospital ≤ cutoff).
+ * Purple rings — Walmart locations that are OSRM systemic gaps (no LINAC + no general acute or critical access hospital ≤ cutoff).
  * Not affected by “Hide Walmarts” (that uses straight-line distance to LINAC markers only).
  */
 function syncSystemicGapPinsFromMetrics(metrics) {
@@ -111,6 +119,9 @@ function syncSystemicGapPinsFromMetrics(metrics) {
         return;
     }
     const minutes = getDriveTimeMinutes();
+    const hospMin = metrics && Number.isFinite(metrics.hospitalBackstopMinutes)
+        ? metrics.hospitalBackstopMinutes
+        : HOSPITAL_BACKSTOP_MINUTES;
     const pins = metrics && Array.isArray(metrics.systemicGapWalmartPins) ? metrics.systemicGapWalmartPins : [];
     pins.forEach((p) => {
         const lat = p.latitude;
@@ -149,7 +160,7 @@ function syncSystemicGapPinsFromMetrics(metrics) {
         }
         const addrHtml = addrParts.map(escapePopupText).join('<br>');
         cm.bindPopup(
-            `<strong>Systemic gap</strong> (OSRM)<br>No LINAC and no general acute hospital within ${escapePopupText(minutes)} min.<br>${escapePopupText(p.name || '')}${addrHtml ? `<br>${addrHtml}` : ''}`
+            `<strong>Systemic gap</strong> (OSRM)<br>No LINAC within ${escapePopupText(minutes)} min and no general acute or critical access hospital within ${escapePopupText(hospMin)} min.<br>${escapePopupText(p.name || '')}${addrHtml ? `<br>${addrHtml}` : ''}`
         );
         cm.on('click', () => {
             flyMapTo(L.latLng(lat, lng), 14);
@@ -369,14 +380,18 @@ async function loadInitialMarkers() {
                 const marker = L.marker(latLng, {
                     icon: blueMarkerIcon
                 }).addTo(map);
-                
+
+                // Attach source row so the sidebar can bucket by w.state (matches /api/metrics)
+                // instead of doing client-side point-in-polygon (which disagreed on border / mislabeled rows).
+                marker.walmartData = location;
+
                 marker.bindPopup(`
                     <strong>Walmart</strong><br>
                     ${location.name}<br>
                     ${location.street_address}<br>
                     ${location.city}, ${location.state}
                 `);
-                
+
                 walmartMarkers.push(marker);
             }
             loadedMarkers++;
@@ -452,7 +467,7 @@ async function loadInitialMarkers() {
                 }).addTo(map);
                 marker.hospitalData = hospital;
                 marker.bindPopup(`
-                    <strong>General acute hospital</strong><br>
+                    <strong>General acute or critical access hospital</strong><br>
                     ${hospital.NAME}<br>
                     ${hospital.CITY}, ${hospital.STATE}
                 `);
@@ -466,10 +481,10 @@ async function loadInitialMarkers() {
         });
 
         console.log(
-            `[Map] Loaded from /api/map-data: ${data.walmart.length} Walmarts, ${data.linac.length} LINAC rows, general-acute hospitals ${hospitalsRaw.length} (NAICS 622110 OPEN; markers inside US polygon + bbox)`
+            `[Map] Loaded from /api/map-data: ${data.walmart.length} Walmarts, ${data.linac.length} LINAC rows, general acute & critical access hospitals ${hospitalsRaw.length} (OPEN; markers inside US polygon + bbox)`
         );
         console.log(`Total LINAC Centers displayed on map (red markers): ${linacMarkers.length}`);
-        console.log(`Total general-acute hospitals displayed (yellow pins): ${hospitalMarkers.length}`);
+        console.log(`Total general acute & critical access hospitals displayed (yellow pins): ${hospitalMarkers.length}`);
         console.log(`LINAC entries with missing/invalid coordinates: ${missingCoordinates}`);
         console.log(`LINAC entries with coordinates outside US bounds: ${outsideUSBounds}`);
     } catch (error) {
@@ -1020,49 +1035,6 @@ async function updateAnalysis() {
     }
 }
 
-// Add helper function to check if a point is inside a polygon
-function isPointInPolygon(point, layer) {
-    let inside = false;
-    const lat = point.lat;
-    const lng = point.lng;
-
-    // Get all polygons from the layer
-    layer.eachLayer(function(polygon) {
-        if (polygon.feature && polygon.feature.geometry) {
-            const coordinates = polygon.feature.geometry.coordinates;
-
-            // Handle both Polygon and MultiPolygon
-            if (polygon.feature.geometry.type === 'Polygon') {
-                if (isPointInCoordinates(lat, lng, coordinates[0])) {
-                    inside = true;
-                }
-            } else if (polygon.feature.geometry.type === 'MultiPolygon') {
-                coordinates.forEach(poly => {
-                    if (isPointInCoordinates(lat, lng, poly[0])) {
-                        inside = true;
-                    }
-                });
-            }
-        }
-    });
-
-    return inside;
-}
-
-// Helper function for point-in-polygon calculation
-function isPointInCoordinates(lat, lng, coords) {
-    let inside = false;
-    for (let i = 0, j = coords.length - 1; i < coords.length; j = i++) {
-        const xi = coords[i][0], yi = coords[i][1];
-        const xj = coords[j][0], yj = coords[j][1];
-
-        const intersect = ((yi > lat) !== (yj > lat)) &&
-            (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
-    }
-    return inside;
-}
-
 // Update the location list function to only show visible Walmart markers
 function updateLocationList() {
     const listContainer = document.getElementById('location-list');
@@ -1074,14 +1046,14 @@ function updateLocationList() {
     
     if (showWalmart) {
         walmartMarkers.forEach(marker => {
-            // For US view, show all markers, for state view, only show those within state boundaries
+            // Bucket by the store's declared state field — matches /api/metrics. Previously used
+            // point-in-polygon, which silently disagreed with the dashboard on border / mislabeled rows.
             let shouldShow = false;
-            
+
             if (selectedState === 'US') {
                 shouldShow = marker.options.opacity !== 0;
-            } else if (stateLayer) {
-                // Use proper point-in-polygon check instead of bounding box
-                shouldShow = isPointInPolygon(marker.getLatLng(), stateLayer) && marker.options.opacity !== 0;
+            } else {
+                shouldShow = marker.walmartData && marker.walmartData.state === selectedState && marker.options.opacity !== 0;
             }
             
             if (shouldShow) {
@@ -1114,14 +1086,14 @@ function updateLocationList() {
         });
     } else {
         linacMarkers.forEach(marker => {
-            // For US view, show all markers, for state view, only show those within state boundaries
+            // Bucket by the center's States field — matches /api/metrics inventory counts.
+            // Previously used point-in-polygon, which disagreed for mislabeled / border rows.
             let shouldShow = false;
-            
+
             if (selectedState === 'US') {
                 shouldShow = true;
-            } else if (stateLayer) {
-                // Use proper point-in-polygon check instead of bounding box
-                shouldShow = isPointInPolygon(marker.getLatLng(), stateLayer);
+            } else {
+                shouldShow = marker.linacData && marker.linacData.States === selectedState;
             }
             
             if (shouldShow) {
@@ -1272,11 +1244,11 @@ function createMetricsTable() {
                                 </th>
                                 <th class="text-end">
                                     <div>Viable gap</div>
-                                    <div class="small text-muted fw-normal mt-1 lh-sm">LINAC center with general acute hospital within ${minutes} min.</div>
+                                    <div class="small text-muted fw-normal mt-1 lh-sm">LINAC gap with general acute or critical access hospital within ${HOSPITAL_BACKSTOP_MINUTES} min.</div>
                                 </th>
                                 <th class="text-end">
                                     <div>Systemic gap</div>
-                                    <div class="small text-muted fw-normal mt-1 lh-sm">LINAC gap, no qualifying general acute hospital within specific driving time.</div>
+                                    <div class="small text-muted fw-normal mt-1 lh-sm">LINAC gap, no general acute or critical access hospital within ${HOSPITAL_BACKSTOP_MINUTES} min.</div>
                                 </th>
                                 <th class="text-end">Total<br>Walmarts</th>
                                 <th class="text-end">LINAC<br>Centers</th>
@@ -1316,7 +1288,7 @@ function createMetricsTable() {
 function downloadMetricsCSV() {
     const minutes = getDriveTimeMinutes();
     const table = document.querySelector('.metrics-table');
-    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM),Viable Gap (General acute hosp ${minutes} min),Systemic Gap,Total Walmarts,LINAC Centers,Total LINACs\n`;
+    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM),Viable Gap (General acute or critical access hospital ${HOSPITAL_BACKSTOP_MINUTES} min),Systemic Gap (no hospital within ${HOSPITAL_BACKSTOP_MINUTES} min),Total Walmarts,LINAC Centers,Total LINACs\n`;
 
     // Get all table rows
     const rows = table.querySelectorAll('tbody tr');
@@ -1381,7 +1353,8 @@ function downloadMetricsJSON() {
             totalWalmarts,
             linacCenters,
             totalLinacs,
-            driveTimeMinutes: parseInt(minutes, 10)
+            driveTimeMinutes: parseInt(minutes, 10),
+            hospitalBackstopMinutes: HOSPITAL_BACKSTOP_MINUTES
         });
     });
     
@@ -1574,7 +1547,7 @@ function getLegendHTML() {
     const hospitalLegend = `
             <div>
                 <img src="/images/markers/marker-icon-yellow.png" alt="Hospital">
-                General acute hospitals
+                General acute &amp; critical access hospitals
             </div>`;
     const systemicLegend = `
             <div>

@@ -70,13 +70,26 @@ app.use((req, res, next) => {
     next();
 });
 
-// Helper function to load data fresh from files
+/**
+ * Load + parse JSON, cached per absolute path keyed on the file's mtimeMs.
+ * Re-reads only when the file changes on disk — preserves edit-and-refresh dev UX
+ * without re-parsing multi-megabyte fixtures on every request.
+ */
+const _jsonFileCache = new Map(); // filePath -> { mtimeMs, parsed }
+
 function loadDataFromFile(relPath, opts) {
     const optional = !!(opts && opts.optional);
     const filePath = path.join(__dirname, String(relPath).replace(/^\.\/+/, ''));
     try {
+        const stat = fs.statSync(filePath);
+        const cached = _jsonFileCache.get(filePath);
+        if (cached && cached.mtimeMs === stat.mtimeMs) {
+            return cached.parsed;
+        }
         const data = fs.readFileSync(filePath, 'utf8');
-        return JSON.parse(data);
+        const parsed = JSON.parse(data);
+        _jsonFileCache.set(filePath, { mtimeMs: stat.mtimeMs, parsed });
+        return parsed;
     } catch (error) {
         if (optional && error && error.code === 'ENOENT') {
             return [];
@@ -155,20 +168,37 @@ function hospitalRowHasValidCoords(h) {
     return isValidLonLat(lat, lon);
 }
 
-/** NAICS 622110 — general medical & surgical hospitals only (excludes psych, specialty, rehab, etc.). */
-const HOSPITAL_NAICS_GENERAL_ACUTE = 622110;
+/**
+ * HIFLD facility-care categories eligible as oncology backstop destinations: general acute care
+ * + critical access (rural acute care under the federal CAH designation). NAICS 622110 was the
+ * previous filter but is too coarse — it lumps in children's general, military general, women's,
+ * and chronic-disease hospitals under "general medical & surgical."
+ */
+const ELIGIBLE_HOSPITAL_TYPES = new Set(['GENERAL ACUTE CARE', 'CRITICAL ACCESS']);
 
-function hospitalGeneralAcuteNaics(h) {
-    const n = Number.parseInt(String(h.NAICS_CODE ?? '').trim(), 10);
-    return Number.isFinite(n) ? n : NaN;
+function hospitalEligibleType(h) {
+    return ELIGIBLE_HOSPITAL_TYPES.has(String(h.TYPE ?? '').trim().toUpperCase());
 }
 
-/** Hospitals used for routing + map: OPEN + general acute care + valid coords. */
+/**
+ * Minimum bed count to qualify as a meaningful inpatient backstop. HIFLD encodes unknown bed
+ * counts as -999; we treat those as "not eligible" rather than admitting them on a maybe — a
+ * facility that doesn't report bed count can't be claimed to clear the threshold.
+ */
+const HOSPITAL_MIN_BEDS = 20;
+
+function hospitalMeetsBedThreshold(h) {
+    const n = Number(h.BEDS);
+    return Number.isFinite(n) && n > HOSPITAL_MIN_BEDS;
+}
+
+/** Hospitals used for routing + map: OPEN + (general acute care | critical access) + valid coords + BEDS > 20. */
 function hospitalRowEligibleRoute(h) {
     return (
         hospitalRowHasValidCoords(h) &&
         String(h.STATUS || '').toUpperCase() === 'OPEN' &&
-        hospitalGeneralAcuteNaics(h) === HOSPITAL_NAICS_GENERAL_ACUTE
+        hospitalEligibleType(h) &&
+        hospitalMeetsBedThreshold(h)
     );
 }
 
@@ -276,7 +306,7 @@ app.get('/api/map-data', (req, res) => {
         : [];
 
     console.log(
-        `[Server] Loading fresh data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs, ${hospitalsForClient.length} general-acute OPEN hospitals (NAICS ${HOSPITAL_NAICS_GENERAL_ACUTE}, coords)`
+        `[Server] Loading fresh data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs, ${hospitalsForClient.length} OPEN general acute & critical access hospitals (TYPE-filtered, BEDS > ${HOSPITAL_MIN_BEDS}, valid coords)`
     );
     console.log(`[Server] First LINAC entry: ${JSON.stringify(linacLocations[0]).substring(0, 200)}`);
     console.log(`[Server] Last LINAC entry: ${JSON.stringify(linacLocations[linacLocations.length-1]).substring(0, 200)}`);
@@ -305,6 +335,16 @@ app.get('/api/map-data', (req, res) => {
 
     res.json(result);
 });
+
+/**
+ * Hospital backstop reachability uses a fixed 30-minute drive-time ceiling, independent of the
+ * user-selected LINAC slider. Rationale: emergency / inpatient backstop care is only clinically
+ * meaningful within a tight time-on-road window — widening the LINAC search to 120+ min should
+ * not also widen what counts as a "reachable hospital." Mirrored on the frontend as a JS const
+ * (returned in the /api/metrics response so dashboard / pin / popup labels stay in sync).
+ */
+const HOSPITAL_BACKSTOP_MINUTES = 30;
+const HOSPITAL_BACKSTOP_THRESHOLD_SECONDS = HOSPITAL_BACKSTOP_MINUTES * 60;
 
 /** Parallel US aggregation batches (avoid OSRM/demo overload); each batch still small vs one national matrix. */
 const US_METRICS_STATE_CONCURRENCY = Math.min(
@@ -356,7 +396,7 @@ async function computeMetricsForStateAbbrev(
     const hospitals = Array.isArray(hospitalLocations) ? hospitalLocations : [];
     const validHospDestOsrm = hospitalRowsForDriveTimeOsrm(stateAbbr, hospitals);
     console.log(
-        `[Server] Hospitals in OSRM destination set (general acute OPEN + border rule): ${validHospDestOsrm.length}`
+        `[Server] Hospitals in OSRM destination set (OPEN general acute & critical access, BEDS > ${HOSPITAL_MIN_BEDS} + border rule): ${validHospDestOsrm.length}`
     );
 
     const linacGapWalmartsValidCoords = [];
@@ -402,12 +442,14 @@ async function computeMetricsForStateAbbrev(
             systemicGapWalmarts = linacGapWalmartsValidCoords.length;
             linacGapWalmartsValidCoords.forEach(pushPinForGapWalmart);
         } else {
+            // Hospital backstop uses its own fixed threshold (HOSPITAL_BACKSTOP_THRESHOLD_SECONDS),
+            // NOT the slider-driven LINAC threshold. Two clinically distinct questions.
             const hospDurations = await getDriveTimes(linacGapWalmartsValidCoords, validHospDestOsrm);
             for (let gi = 0; gi < linacGapWalmartsValidCoords.length; gi++) {
                 const row = hospDurations[gi];
                 const nearHospital =
                     Array.isArray(row) &&
-                    row.some((seconds) => seconds != null && seconds <= driveTimeThresholdSeconds);
+                    row.some((seconds) => seconds != null && seconds <= HOSPITAL_BACKSTOP_THRESHOLD_SECONDS);
                 if (nearHospital) {
                     viableGapWalmarts += 1;
                 } else {
@@ -429,7 +471,7 @@ async function computeMetricsForStateAbbrev(
     console.log(`[Server] State ${stateAbbr} has ${totalCenters} LINAC centers with ${totalLinacs} total LINACs`);
 
     console.log(
-        `[Server] Gap split (${stateAbbr}): viable ${viableGapWalmarts}, systemic ${systemicGapWalmarts} (LINAC-gap valid-coord stores; OSRM minutes to nearest general-acute hospital)`
+        `[Server] Gap split (${stateAbbr}): viable ${viableGapWalmarts}, systemic ${systemicGapWalmarts} (LINAC-gap valid-coord stores; OSRM ≤ ${HOSPITAL_BACKSTOP_MINUTES} min to nearest general acute or critical access hospital)`
     );
 
     const gapValid = viableGapWalmarts + systemicGapWalmarts;
@@ -447,7 +489,8 @@ async function computeMetricsForStateAbbrev(
         systemicGapWalmartPins,
         totalWalmarts: stateWalmarts.length,
         cityCentersWithinRange: totalCenters,
-        linacsWithinRange: totalLinacs
+        linacsWithinRange: totalLinacs,
+        hospitalBackstopMinutes: HOSPITAL_BACKSTOP_MINUTES
     };
 }
 
@@ -485,7 +528,12 @@ app.get('/api/metrics', async (req, res) => {
 
     /** National row: sum state-level metrics (same OSRM semantics as single-state queries). No single huge Table call. */
     if (stateAbbr === 'US') {
-        const codes = [...new Set(walmartLocations.map((w) => w.state).filter(Boolean))].sort();
+        // Union of state codes across both fixtures so inventory in states with no Walmarts
+        // (or vice versa) still rolls into the national totals.
+        const codes = [...new Set([
+            ...walmartLocations.map((w) => w.state),
+            ...linacLocations.map((l) => l.States)
+        ].filter(Boolean))].sort();
         const totals = {
             walmartsOutsideRange: 0,
             viableGapWalmarts: 0,
@@ -493,7 +541,8 @@ app.get('/api/metrics', async (req, res) => {
             systemicGapWalmartPins: [],
             totalWalmarts: 0,
             cityCentersWithinRange: 0,
-            linacsWithinRange: 0
+            linacsWithinRange: 0,
+            hospitalBackstopMinutes: HOSPITAL_BACKSTOP_MINUTES
         };
 
         console.log(
@@ -567,11 +616,25 @@ app.get('/api/states', (req, res) => {
     res.json(sortedStates);
 });
 
+/**
+ * State / country administrative boundaries from Nominatim are effectively immutable; cache them
+ * aggressively so repeat Run-Analysis clicks don't re-hit the Nominatim API (usage-policy risk
+ * + slow UX). Only successful lookups are cached — failures retry on next request.
+ */
+const STATE_BOUNDARY_TTL_SEC = 30 * 24 * 60 * 60; // 30 days
+const stateBoundaryCache = new NodeCache({ stdTTL: STATE_BOUNDARY_TTL_SEC, useClones: false });
+
 app.get('/api/state-boundary/:state', async (req, res) => {
-    // Dynamic data loading
     const state = req.params.state;
+    const cacheKey = String(state || '').toUpperCase();
+
+    const cachedGeojson = cacheKey ? stateBoundaryCache.get(cacheKey) : undefined;
+    if (cachedGeojson !== undefined) {
+        return res.json([{ geojson: cachedGeojson }]);
+    }
+
     let stateName = stateMapping[state] || state;
-    
+
     try {
         // Special case for US
         if (state === 'US') {
@@ -600,16 +663,17 @@ app.get('/api/state-boundary/:state', async (req, res) => {
             if (!boundaryData || !boundaryData.geojson) {
                 return res.status(404).json({ error: 'US Boundary not found' });
             }
-            
+
+            stateBoundaryCache.set(cacheKey, boundaryData.geojson);
             return res.json([{ geojson: boundaryData.geojson }]);
         }
-        
+
         // For individual states, use Nominatim instead of Overpass for more reliable results
         const fullStateName = stateName;
         const stateQuery = `${fullStateName}, United States`;
         const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(stateQuery)}&format=json&polygon_geojson=1&countrycodes=us`;
-        
-        console.log(`[Server] Fetching boundary for state: ${state} (${fullStateName})`);
+
+        console.log(`[Server] Fetching boundary for state: ${state} (${fullStateName}) — cache miss`);
         
         const response = await axios.get(nominatimUrl, {
             headers: {
@@ -636,7 +700,8 @@ app.get('/api/state-boundary/:state', async (req, res) => {
             console.error(`[Server] No valid boundary data found for state: ${state}`);
             return res.status(404).json({ error: 'Boundary not found' });
         }
-        
+
+        stateBoundaryCache.set(cacheKey, boundaryData.geojson);
         return res.json([{ geojson: boundaryData.geojson }]);
     } catch (error) {
         console.error('Error fetching state boundary:', error);
@@ -813,9 +878,51 @@ module.exports = {
     walmartRowHasValidCoords,
     hospitalRowsForDriveTimeOsrm,
     hospitalRowEligibleRoute,
-    hospitalGeneralAcuteNaics,
+    hospitalEligibleType,
+    hospitalMeetsBedThreshold,
+    HOSPITAL_BACKSTOP_MINUTES,
     geoLatLonFromRow
 };
+
+/**
+ * Startup-time check: flag any state-like code in the data files that isn't a recognized
+ * 2-letter abbreviation. Catches cases like `States: "Kentucky"` that silently drop inventory
+ * from per-state and US-aggregate metrics.
+ */
+const RECOGNIZED_STATE_CODES = new Set([
+    ...Object.keys(stateMapping).filter((c) => c !== 'US'),
+    'DC', 'PR', 'VI', 'GU', 'MP', 'AS'
+]);
+
+function warnOnUnknownStateCodes() {
+    const walmarts = loadDataFromFile('./src/data/walmart-locations.json');
+    const linacs = loadDataFromFile('./src/data/linac-locations.json');
+    const hospitals = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+
+    const seen = new Map(); // code -> [sources]
+    const note = (code, src) => {
+        if (code == null || code === '') return;
+        if (!RECOGNIZED_STATE_CODES.has(code)) {
+            if (!seen.has(code)) seen.set(code, new Set());
+            seen.get(code).add(src);
+        }
+    };
+    walmarts.forEach((w) => note(w.state, 'walmart-locations.json:state'));
+    linacs.forEach((l) => note(l.States, 'linac-locations.json:States'));
+    if (Array.isArray(hospitals)) {
+        hospitals.forEach((h) => note(h.STATE, 'hospital-locations.json:STATE'));
+    }
+
+    if (seen.size === 0) {
+        console.log('[Data] State codes validated — all values are recognized 2-letter codes.');
+        return;
+    }
+    for (const [code, sources] of seen) {
+        console.warn(
+            `[Data] Unrecognized state code ${JSON.stringify(code)} found in ${[...sources].join(', ')} — this row will be dropped from per-state and US metrics.`
+        );
+    }
+}
 
 if (require.main === module) {
     app.listen(PORT, () => {
@@ -833,5 +940,6 @@ if (require.main === module) {
         if (process.env.PORT) {
             console.log(`Ready for iframe embedding on Render`);
         }
+        warnOnUnknownStateCodes();
     });
 }
