@@ -1,6 +1,6 @@
 # Methodology: Walmart–LINAC Drive-Time Gap Analysis
 
-This document describes — in scientific rather than software-engineering terms — how the figures shown in the application's **metrics table** are computed. It is intended for researchers, clinicians, and reviewers who need to understand and reproduce the analysis. It does not describe how the code is structured; for that, see [`PROJECT.md`](./PROJECT.md).
+This document describes — in scientific rather than software-engineering terms — how the figures shown in the application's **metrics table** are computed, plus an optional **supplementary** breakdown of viable LINAC gaps by nearest hospital type (general acute vs. critical access; §10). It is intended for researchers, clinicians, and reviewers who need to understand and reproduce the analysis. It does not describe how the code is structured; for that, see [`PROJECT.md`](./PROJECT.md).
 
 ---
 
@@ -25,7 +25,7 @@ Three static datasets drive the analysis. All are loaded fresh from disk on each
 |---|---|---|---|
 | Walmart store locations | `src/data/walmart-locations.json` | 4,654 | Includes the contiguous 48, AK, HI, DC, and PR. Fields: name, address, city, state (two-letter), latitude, longitude. |
 | LINAC facility locations | `src/data/linac-locations.json` | 2,124 records / ~2,250 machines | Compiled from publicly available radiation oncology facility lists. Fields: facility name, city, state (two-letter), coordinates, and the number of LINAC machines at the site. |
-| Hospital locations | `src/data/hospital-locations.json` | 7,596 raw rows | HIFLD-style (Homeland Infrastructure Foundation-Level Data) U.S. hospital inventory. Fields used: NAME, STATE, STATUS, TYPE, BEDS, LATITUDE, LONGITUDE. |
+| Hospital locations | `src/data/hospital-locations.json` | 7,596 raw rows | HIFLD-style (Homeland Infrastructure Foundation-Level Data) U.S. hospital inventory. Fields used: NAME, STATE, STATUS, TYPE, LATITUDE, LONGITUDE. |
 
 State coverage is the 50 states plus the District of Columbia (DC) and Puerto Rico (PR). The hospital file contains one row coded as Palau (PW); that row is flagged at startup and excluded from per-state and US results.
 
@@ -47,22 +47,17 @@ The LINAC machine count for a facility is taken verbatim from its `Number of LIN
 
 ### 3.3 Hospitals
 
-This is the most filtered of the three datasets. A hospital row is eligible to serve as a routing destination if **all four** of the following hold:
+A hospital row is eligible to serve as a routing destination if **all three** of the following hold:
 
 1. **Valid coordinates** — finite latitude and longitude in the legal WGS84 range.
 2. **`STATUS = 'OPEN'`** — closed hospitals are excluded. In the source data, 319 of 7,596 rows are coded `CLOSED`.
 3. **`TYPE ∈ {GENERAL ACUTE CARE, CRITICAL ACCESS}`** — the two HIFLD facility-care categories that represent inpatient acute care. The eight excluded categories are `PSYCHIATRIC`, `LONG TERM CARE`, `REHABILITATION`, `MILITARY`, `SPECIAL`, `CHILDREN`, `WOMEN`, and `CHRONIC DISEASE`.
-4. **`BEDS > 20`** — strict inequality. HIFLD encodes unknown bed counts as `-999`; that sentinel value fails the test and is excluded.
 
-After applying all four filters, **4,717 hospitals** are eligible: 3,957 general acute care + 760 critical access.
+After applying all three filters, **5,271 hospitals** are eligible: 4,261 general acute care + 1,010 critical access (counts exclude closed rows, non-eligible `TYPE`s, invalid coordinates, and territory codes with no Walmart footprint: AS, GU, MP, PW, VI). No bed-count threshold is applied — the clinical `TYPE` filter alone determines inpatient-backstop eligibility, and facilities with unreported bed counts (HIFLD's `-999` sentinel) are included on the same basis as any other open acute-care or critical-access hospital.
 
 #### Why the `TYPE` filter rather than NAICS
 
 An earlier version of this analysis used the NAICS economic classifier (`NAICS_CODE = 622110`, "general medical and surgical hospitals") to select eligible hospitals. That filter is too coarse for an oncology backstop question: NAICS 622110 also bundles in 215 military hospitals, 105 psychiatric facilities filed under the general-medical NAICS, 104 children's general hospitals, 54 long-term-care facilities, 33 rehabilitation hospitals, and 18 other specialty facilities (529 rows total) that should not be counted as a general-population emergency or inpatient backstop. Conversely, NAICS 622110 misses 11 hospitals that HIFLD classifies as `GENERAL ACUTE CARE` (for example, OSU James Cancer Hospital, classified under specialty NAICS but operating as acute care). The HIFLD `TYPE` field, while less stable across data vintages, is the correct clinical classifier for this question.
-
-#### Why the bed-count floor
-
-A facility reporting fewer than ~20 beds is generally a small clinic, free-standing emergency department, or rural physician extension rather than a meaningful inpatient backstop. We chose **`BEDS > 20`** as the threshold; this excludes 463 small facilities. The 98 rows where HIFLD reports `BEDS = -999` (bed count not reported) are also excluded — a facility that does not report bed count cannot be claimed to clear the threshold. If a permissive interpretation is desired in future runs (count the 98 unreported facilities as "potentially over the threshold"), the constant `HOSPITAL_MIN_BEDS` in the server source is the single point to change.
 
 #### Why "critical access" is included
 
@@ -146,6 +141,8 @@ For each Walmart store **W** that is LINAC-gap and has valid coordinates, the OS
 >
 > Otherwise *W is a **systemic gap***.
 
+Step 2 records only whether **any** eligible hospital is within 30 minutes. It does **not** record which `TYPE` satisfied the test. A separate supplementary breakdown (§10) classifies each **viable** gap by the `TYPE` of the **nearest** hospital among those within 30 minutes.
+
 A LINAC-gap store therefore splits cleanly into one of three categories: **viable gap**, **systemic gap**, or — if its coordinates are invalid and Step 2 cannot be run — neither. The third category is rare in the current data but is reported transparently (see §6.3).
 
 ### 6.3 Putting it together
@@ -180,6 +177,8 @@ For each state, the metrics table reports six numbers plus a row label.
 | Total LINACs | Sum of the `Number of LINACs` field across all LINAC centers in this state |
 
 The last three are **inventory counts**, not OSRM-derived. They reflect what is present in the state, not what is reachable.
+
+These six columns do **not** include a general-acute vs. critical-access split. That split is produced only by the offline report described in §10.
 
 ---
 
@@ -217,14 +216,87 @@ A few edge cases are worth being explicit about for reviewers.
 
 ---
 
-## 10. Limitations
+## 10. Supplementary analysis: viable-gap backstop by hospital TYPE
+
+Researchers often need to know not only that a LINAC-gap Walmart has **some** hospital backstop within 30 minutes (a **viable gap**), but whether the closest such backstop is **general acute care** or **critical access**. That breakdown is **not** shown in the web metrics table; it is generated by an offline script that reuses the same OSRM rules as §§4–6.
+
+### 10.1 Definition (per viable-gap Walmart)
+
+Fix the LINAC drive-time threshold (the script default is **60 minutes**, matching the application default). Classify stores with Step 1 and Step 2 as in §6. For each store **W** that is a **viable gap** (coord-valid, LINAC-gap, and at least one eligible hospital ≤ 30 minutes):
+
+1. Consider only hospital columns `k` in W's hospital OSRM row where `duration[W][k]` is not null and `duration[W][k] ≤ 30 × 60`.
+2. Among those columns, take the one with the **minimum** duration (ties broken by the smallest column index).
+3. Assign W the `TYPE` of the hospital in that column: `GENERAL ACUTE CARE` or `CRITICAL ACCESS`.
+
+**Systemic gaps** (no hospital ≤ 30 minutes) are excluded from this TYPE split. **Invalid-coordinate** LINAC-gap stores are excluded because Step 2 does not run for them.
+
+This is a **per-store** count (342 stores at the national default), not a count of unique hospitals. One critical-access hospital may be the nearest backstop for many Walmarts.
+
+### 10.2 National snapshot (60-minute LINAC threshold)
+
+At the default 60-minute LINAC ceiling and 30-minute hospital backstop, the current data vintage yields:
+
+| Category | Count |
+|---|---:|
+| LINAC-gap Walmarts (all) | 347 |
+| Viable gap (any hospital ≤ 30 min) | 342 |
+| Systemic gap | 5 |
+| Viable — nearest backstop is **general acute care** | 251 (**73.4%** of viable) |
+| Viable — nearest backstop is **critical access** | 91 (**26.6%** of viable) |
+
+Critical access is ~19% of the national eligible-hospital inventory (§3.3) but ~27% of nearest backstops among viable gaps, because LINAC gaps cluster in rural markets where CAHs are more often the closest acute facility.
+
+### 10.3 Per-state table and store list
+
+The script writes comma-separated and Markdown tables with one row per state that has at least one LINAC-gap Walmart. Columns:
+
+| Column | Meaning |
+|---|---|
+| `general_acute` | Viable-gap stores whose nearest ≤30 min hospital is `GENERAL ACUTE CARE` |
+| `critical_access` | Viable-gap stores whose nearest ≤30 min hospital is `CRITICAL ACCESS` |
+| `viable_total` | `general_acute` + `critical_access` (equals viable gap for that state) |
+| `systemic` | LINAC-gap stores with no hospital ≤ 30 min |
+| `linac_gaps` | All LINAC-gap stores in the state (includes invalid coords) |
+
+It also emits a line-per-store list of all viable-gap Walmarts (name, city, state, backstop type, nearest hospital name, approximate drive minutes).
+
+**How to reproduce**
+
+```bash
+node scripts/gap-backstop-hospital-type.js
+```
+
+**Outputs** (under `scripts/output/`):
+
+| File | Contents |
+|---|---|
+| `gap-backstop-analysis.json` | Full machine-readable results (regenerate CSV/MD without OSRM via `--from-json`) |
+| `gap-backstop-by-state.csv` / `.md` | State × TYPE counts |
+| `viable-gap-walmarts.csv` | All viable-gap stores with hospital detail |
+| `viable-gap-walmart-names.txt` | Human-readable name list |
+
+**Runtime and cache.** The script calls the same public OSRM Table service as the server. OSRM responses are cached **in memory for that Node process** (default TTL 7 days). A new terminal invocation starts with a cold cache (~20–30 minutes for a full national run). The running application server maintains a **separate** in-memory cache; warming one does not warm the other. After `gap-backstop-analysis.json` exists, `node scripts/gap-backstop-hospital-type.js --from-json` rebuilds the CSV/Markdown exports instantly.
+
+**Slider note.** The batch script fixes LINAC time at 60 minutes. Changing the in-app LINAC slider changes which stores are LINAC-gap and therefore changes viable counts and TYPE splits; re-run the script (or add a `driveTimeMinutes` parameter in a future revision) to match a non-default threshold.
+
+---
+
+## 11. Limitations
 
 A reviewer should weigh the following before drawing conclusions from the figures.
 
 1. **OSRM demo dependency.** The public router has no SLA, and the underlying OSM extract date is not pinned by this application. For publication, the OSRM service should be replaced with a self-hosted instance against a recorded OSM extract.
+
 2. **"Hospital" ≠ "cancer-capable hospital."** The hospital backstop set is a proxy for *any* meaningful acute-care facility. Whether a given general-acute or critical-access hospital can actually provide oncology services, infusion therapy, or emergency cancer care is not encoded in the data and is not tested.
+
 3. **LINAC count vs. operating capacity.** The `Number of LINACs` field is a machine count, not a capacity-adjusted measure. A single LINAC at a critical-access cancer center is counted the same as one of several LINACs at a large academic medical center.
+
 4. **Snapshot, not time series.** All three datasets are static. Hospital openings/closings, LINAC deployments, and Walmart store changes after the data vintage are not reflected.
+
 5. **Population proxy.** Walmart stores are used as population access proxies; this is a deliberate methodological choice driven by data availability and rural-population correlation, but it is not a substitute for census-based population analysis. Areas with Walmart presence and areas without are not analyzed equivalently.
+
 6. **OSRM driving profile.** The `driving` profile uses generic car-routing assumptions: no traffic, no time-of-day variation, and default speed assumptions on each road class. Real travel times will vary.
-7. **Filter sensitivity.** The 30-minute hospital threshold and the 20-bed floor are policy choices, not derived from this analysis. Both are isolated to single constants in code and can be varied to test sensitivity.
+
+7. **Filter sensitivity.** The 30-minute hospital backstop ceiling is a policy choice, fixed in code (`HOSPITAL_BACKSTOP_MINUTES`). No bed-count filter is applied to hospitals (see §3.3). The LINAC slider threshold is configurable in the UI; the supplementary TYPE report (§10) defaults to 60 minutes unless the script is re-run at another value.
+
+8. **Nearest-hospital TYPE is not clinical capability.** The supplementary split identifies the closest eligible acute or critical-access facility by drive time, not whether that facility can deliver oncology, infusion, or emergency cancer care (see item 2 above).

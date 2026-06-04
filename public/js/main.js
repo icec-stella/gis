@@ -1309,11 +1309,15 @@ function createMetricsTable() {
                                 <th class="text-end">Total<br>Walmarts</th>
                                 <th class="text-end">LINAC<br>Centers</th>
                                 <th class="text-end">Total<br>LINACs</th>
+                                <th class="text-end">
+                                    <div>Total<br>Hospitals</div>
+                                    <div class="small text-muted fw-normal mt-1 lh-sm">OPEN general acute &amp; critical access (excludes CLOSED; AS, GU, MP, PW, VI excluded).</div>
+                                </th>
                             </tr>
                         </thead>
                         <tbody id="metrics-table-body">
                             <tr>
-                                <td colspan="7" class="text-center">
+                                <td colspan="8" class="text-center">
                                     <div class="spinner-border text-primary" role="status">
                                         <span class="visually-hidden">Loading...</span>
                                     </div>
@@ -1344,7 +1348,7 @@ function createMetricsTable() {
 function downloadMetricsCSV() {
     const minutes = getDriveTimeMinutes();
     const table = document.querySelector('.metrics-table');
-    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM),Viable Gap (General acute or critical access hospital ${HOSPITAL_BACKSTOP_MINUTES} min),Systemic Gap (no hospital within ${HOSPITAL_BACKSTOP_MINUTES} min),Total Walmarts,LINAC Centers,Total LINACs\n`;
+    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM),Viable Gap (General acute or critical access hospital ${HOSPITAL_BACKSTOP_MINUTES} min),Systemic Gap (no hospital within ${HOSPITAL_BACKSTOP_MINUTES} min),Total Walmarts,LINAC Centers,Total LINACs,Total Hospitals\n`;
 
     // Get all table rows
     const rows = table.querySelectorAll('tbody tr');
@@ -1352,7 +1356,7 @@ function downloadMetricsCSV() {
     // Convert each row to CSV
     rows.forEach((row) => {
         const cells = row.querySelectorAll('td');
-        if (cells.length < 7 || row.id === 'metrics-table-loading-banner') {
+        if (cells.length < 8 || row.id === 'metrics-table-loading-banner') {
             return;
         }
         const rowData = Array.from(cells)
@@ -1390,7 +1394,7 @@ function downloadMetricsJSON() {
     // Convert each row to a JSON object
     rows.forEach(row => {
         const cells = row.querySelectorAll('td');
-        if (cells.length < 7 || row.id === 'metrics-table-loading-banner') {
+        if (cells.length < 8 || row.id === 'metrics-table-loading-banner') {
             return;
         }
         const state = cells[0].textContent.trim();
@@ -1400,6 +1404,7 @@ function downloadMetricsJSON() {
         const totalWalmarts = parseInt(cells[4].textContent.replace(/,/g, '')) || 0;
         const linacCenters = parseInt(cells[5].textContent.replace(/,/g, '')) || 0;
         const totalLinacs = parseInt(cells[6].textContent.replace(/,/g, '')) || 0;
+        const totalHospitals = parseInt(cells[7].textContent.replace(/,/g, '')) || 0;
 
         jsonData.push({
             state,
@@ -1409,6 +1414,7 @@ function downloadMetricsJSON() {
             totalWalmarts,
             linacCenters,
             totalLinacs,
+            totalHospitals,
             driveTimeMinutes: parseInt(minutes, 10),
             hospitalBackstopMinutes: HOSPITAL_BACKSTOP_MINUTES
         });
@@ -1432,7 +1438,7 @@ function downloadMetricsJSON() {
 function metricsTableLoadingRow(doneStates, totalStates) {
     return `
             <tr id="metrics-table-loading-banner">
-                <td colspan="7" class="text-center py-2 text-muted bg-light border-bottom">
+                <td colspan="8" class="text-center py-2 text-muted bg-light border-bottom">
                     <div class="d-flex justify-content-center align-items-center gap-2 flex-wrap py-2">
                         <div class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></div>
                         <span>Loading state metrics (${doneStates} / ${totalStates})...</span>
@@ -1449,7 +1455,8 @@ function sumMetricsTotals(metricsList) {
             systemicGapWalmarts: acc.systemicGapWalmarts + (m.systemicGapWalmarts || 0),
             totalWalmarts: acc.totalWalmarts + (m.totalWalmarts || 0),
             cityCentersWithinRange: acc.cityCentersWithinRange + (m.cityCentersWithinRange || 0),
-            linacsWithinRange: acc.linacsWithinRange + (m.linacsWithinRange || 0)
+            linacsWithinRange: acc.linacsWithinRange + (m.linacsWithinRange || 0),
+            totalHospitals: acc.totalHospitals + (m.totalHospitals || 0)
         }),
         {
             walmartsOutsideRange: 0,
@@ -1457,15 +1464,19 @@ function sumMetricsTotals(metricsList) {
             systemicGapWalmarts: 0,
             totalWalmarts: 0,
             cityCentersWithinRange: 0,
-            linacsWithinRange: 0
+            linacsWithinRange: 0,
+            totalHospitals: 0
         }
     );
 }
 
-function renderMetricsRow(st, metrics, isStrong) {
+function renderMetricsRow(st, metrics, isStrong, hospitalCountOverride) {
     const m = metrics;
     const a = isStrong ? '<strong>' : '';
     const z = isStrong ? '</strong>' : '';
+    const hospitalCount = Number.isFinite(hospitalCountOverride)
+        ? hospitalCountOverride
+        : (m.totalHospitals || 0);
     return `
         <tr${isStrong ? ' class="us-total-row"' : ''}>
             <td>${a}${st}${z}</td>
@@ -1475,6 +1486,7 @@ function renderMetricsRow(st, metrics, isStrong) {
             <td class="text-end">${a}${(m.totalWalmarts || 0).toLocaleString()}${z}</td>
             <td class="text-end">${a}${(m.cityCentersWithinRange || 0).toLocaleString()}${z}</td>
             <td class="text-end">${a}${(m.linacsWithinRange || 0).toLocaleString()}${z}</td>
+            <td class="text-end">${a}${hospitalCount.toLocaleString()}${z}</td>
         </tr>
     `;
 }
@@ -1486,10 +1498,21 @@ async function populateTableData() {
     const CONCURRENCY = 3;
 
     try {
+        const inventoryRes = await fetchWithCacheBusting('/api/hospital-inventory');
+        const inventory = inventoryRes.ok ? await inventoryRes.json() : { total: 0, byState: {} };
+        const inventoryByState = inventory.byState || {};
+
         const states = Array.from(document.getElementById('state').options)
             .map((option) => ({ value: option.value, text: option.text }))
             .filter((option) => option.value !== 'all' && option.value !== 'US' && option.value !== '')
             .sort((a, b) => a.text.localeCompare(b.text));
+
+        for (const code of Object.keys(inventoryByState)) {
+            if (!states.some((s) => s.value === code)) {
+                states.push({ value: code, text: stateNames[code] || code });
+            }
+        }
+        states.sort((a, b) => a.text.localeCompare(b.text));
 
         const fetchMetrics = (stateCode) =>
             fetchWithCacheBusting(
@@ -1499,7 +1522,7 @@ async function populateTableData() {
         console.log(`[Table] OSRM reachability per state (${minutes} min; cross-border contiguous, AK/HI/PR isolated). US row = sum.`);
 
         let tableRows = '';
-        /** @type {{ walmartsOutsideRange: number, viableGapWalmarts?: number, systemicGapWalmarts?: number, totalWalmarts: number, cityCentersWithinRange: number, linacsWithinRange: number }[]} */
+        /** @type {{ walmartsOutsideRange: number, viableGapWalmarts?: number, systemicGapWalmarts?: number, totalWalmarts: number, cityCentersWithinRange: number, linacsWithinRange: number, totalHospitals?: number }[]} */
         const metricsForTotals = [];
 
         tableBody.innerHTML = metricsTableLoadingRow(0, states.length);
@@ -1516,7 +1539,7 @@ async function populateTableData() {
             );
             doneStates += batch.length;
             for (const { state: st, metrics: m } of batch) {
-                tableRows += renderMetricsRow(st.text, m, false);
+                tableRows += renderMetricsRow(st.text, m, false, inventoryByState[st.value] || 0);
                 metricsForTotals.push(m);
             }
 
@@ -1527,7 +1550,8 @@ async function populateTableData() {
 
         const usTotals = sumMetricsTotals(metricsForTotals);
 
-        tableBody.innerHTML = renderMetricsRow('United States (sum)', usTotals, true) + tableRows;
+        tableBody.innerHTML =
+            renderMetricsRow('United States (sum)', usTotals, true, inventory.total || 0) + tableRows;
 
         const sample = metricsForTotals[0];
         if (sample && !('viableGapWalmarts' in sample)) {
@@ -1541,7 +1565,7 @@ async function populateTableData() {
         console.error('Error loading table metrics:', error);
         tableBody.innerHTML = `
             <tr>
-                <td colspan="7" class="text-center text-danger">
+                <td colspan="8" class="text-center text-danger">
                     Error loading metrics: ${error.message}
                 </td>
             </tr>

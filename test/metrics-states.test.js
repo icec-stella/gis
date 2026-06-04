@@ -18,7 +18,8 @@ const {
     app,
     linacRowsForDriveTimeOsrm,
     linacRowHasValidCoords,
-    walmartRowHasValidCoords
+    walmartRowHasValidCoords,
+    hospitalRowEligibleRoute
 } = require('../server.js');
 
 const DATA_DIR = path.join(__dirname, '..', 'src', 'data');
@@ -31,17 +32,21 @@ function loadJson(name) {
 /** Variety: isolated (AK, HI, PR), large/medium continental, sparse. */
 const TEN_STATES = ['AK', 'TX', 'CA', 'NH', 'ND', 'DE', 'FL', 'HI', 'PR', 'WY'];
 
-function expectedTotalsFromFixture(stateAbbr, walmartLocations, linacLocations) {
+function expectedTotalsFromFixture(stateAbbr, walmartLocations, linacLocations, hospitalLocations) {
     const stores = walmartLocations.filter((w) => w.state === stateAbbr);
     const centers = linacLocations.filter((c) => c.States === stateAbbr);
     let linacUnits = 0;
     centers.forEach((c) => {
         linacUnits += parseInt(c['Number of LINACs'], 10) || 0;
     });
+    const hospitalsInState = Array.isArray(hospitalLocations)
+        ? hospitalLocations.filter((h) => h.STATE === stateAbbr && hospitalRowEligibleRoute(h)).length
+        : 0;
     return {
         totalWalmarts: stores.length,
         cityCentersWithinRange: centers.length,
-        linacsWithinRange: linacUnits
+        linacsWithinRange: linacUnits,
+        totalHospitals: hospitalsInState
     };
 }
 
@@ -51,10 +56,12 @@ describe(
     () => {
         let walmartLocations;
         let linacLocations;
+        let hospitalLocations;
 
         before(() => {
             walmartLocations = loadJson('walmart-locations.json');
             linacLocations = loadJson('linac-locations.json');
+            hospitalLocations = loadJson('hospital-locations.json');
 
             const continentalAnchors = linacRowsForDriveTimeOsrm('TX', linacLocations).length;
             console.log(`[tests] continental LINAC anchor count (via TX helper)=${continentalAnchors}`);
@@ -75,7 +82,12 @@ describe(
 
         for (const stateAbbr of TEN_STATES) {
             it(`${stateAbbr}: 200, totals match fixtures, gaps bounded`, { timeout: 180000 }, async () => {
-                const expected = expectedTotalsFromFixture(stateAbbr, walmartLocations, linacLocations);
+                const expected = expectedTotalsFromFixture(
+                    stateAbbr,
+                    walmartLocations,
+                    linacLocations,
+                    hospitalLocations
+                );
 
                 const res = await request(app)
                     .get('/api/metrics')
@@ -95,7 +107,8 @@ describe(
                     'systemicGapWalmarts',
                     'totalWalmarts',
                     'cityCentersWithinRange',
-                    'linacsWithinRange'
+                    'linacsWithinRange',
+                    'totalHospitals'
                 ]) {
                     assert.ok(k in b, `missing ${k}`);
                     assert.equal(typeof b[k], 'number');
@@ -112,6 +125,7 @@ describe(
                 assert.equal(b.totalWalmarts, expected.totalWalmarts, 'total Walmart count');
                 assert.equal(b.cityCentersWithinRange, expected.cityCentersWithinRange, 'LINAC center count');
                 assert.equal(b.linacsWithinRange, expected.linacsWithinRange, 'LINAC unit sum');
+                assert.equal(b.totalHospitals, expected.totalHospitals, 'eligible hospital count');
 
                 assert.ok(b.viableGapWalmarts >= 0, 'viable non-negative');
                 assert.ok(b.systemicGapWalmarts >= 0, 'systemic non-negative');

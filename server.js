@@ -176,30 +176,37 @@ function hospitalRowHasValidCoords(h) {
  */
 const ELIGIBLE_HOSPITAL_TYPES = new Set(['GENERAL ACUTE CARE', 'CRITICAL ACCESS']);
 
+/** Pacific / Caribbean territories in HIFLD with no Walmart footprint — excluded from hospital inventory. */
+const EXCLUDED_HOSPITAL_TERRITORY_STATES = new Set(['AS', 'GU', 'MP', 'PW', 'VI']);
+
 function hospitalEligibleType(h) {
     return ELIGIBLE_HOSPITAL_TYPES.has(String(h.TYPE ?? '').trim().toUpperCase());
 }
 
-/**
- * Minimum bed count to qualify as a meaningful inpatient backstop. HIFLD encodes unknown bed
- * counts as -999; we treat those as "not eligible" rather than admitting them on a maybe — a
- * facility that doesn't report bed count can't be claimed to clear the threshold.
- */
-const HOSPITAL_MIN_BEDS = 20;
-
-function hospitalMeetsBedThreshold(h) {
-    const n = Number(h.BEDS);
-    return Number.isFinite(n) && n > HOSPITAL_MIN_BEDS;
+function hospitalTerritoryExcluded(h) {
+    return EXCLUDED_HOSPITAL_TERRITORY_STATES.has(String(h.STATE ?? '').trim().toUpperCase());
 }
 
-/** Hospitals used for routing + map: OPEN + (general acute care | critical access) + valid coords + BEDS > 20. */
+/** Hospitals used for routing + map: OPEN + (general acute care | critical access) + valid coords; no excluded territories. */
 function hospitalRowEligibleRoute(h) {
     return (
+        !hospitalTerritoryExcluded(h) &&
         hospitalRowHasValidCoords(h) &&
         String(h.STATUS || '').toUpperCase() === 'OPEN' &&
-        hospitalEligibleType(h) &&
-        hospitalMeetsBedThreshold(h)
+        hospitalEligibleType(h)
     );
+}
+
+/** OPEN general acute + critical access hospitals in a state (excludes CLOSED and other TYPEs). */
+function hospitalCountForState(stateAbbr, hospitals) {
+    if (!Array.isArray(hospitals)) return 0;
+    return hospitals.filter((h) => h.STATE === stateAbbr && hospitalRowEligibleRoute(h)).length;
+}
+
+/** Distinct STATE codes for eligible hospitals (excludes territory codes with no Walmart footprint). */
+function hospitalStateCodesFromFile(hospitals) {
+    if (!Array.isArray(hospitals)) return [];
+    return [...new Set(hospitals.filter(hospitalRowEligibleRoute).map((h) => h.STATE).filter(Boolean))].sort();
 }
 
 /** Same AK / HI / PR destination isolation as LINAC Table anchors. */
@@ -306,7 +313,7 @@ app.get('/api/map-data', (req, res) => {
         : [];
 
     console.log(
-        `[Server] Loading fresh data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs, ${hospitalsForClient.length} OPEN general acute & critical access hospitals (TYPE-filtered, BEDS > ${HOSPITAL_MIN_BEDS}, valid coords)`
+        `[Server] Loading fresh data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs, ${hospitalsForClient.length} OPEN general acute & critical access hospitals (TYPE-filtered, valid coords)`
     );
     console.log(`[Server] First LINAC entry: ${JSON.stringify(linacLocations[0]).substring(0, 200)}`);
     console.log(`[Server] Last LINAC entry: ${JSON.stringify(linacLocations[linacLocations.length-1]).substring(0, 200)}`);
@@ -396,7 +403,7 @@ async function computeMetricsForStateAbbrev(
     const hospitals = Array.isArray(hospitalLocations) ? hospitalLocations : [];
     const validHospDestOsrm = hospitalRowsForDriveTimeOsrm(stateAbbr, hospitals);
     console.log(
-        `[Server] Hospitals in OSRM destination set (OPEN general acute & critical access, BEDS > ${HOSPITAL_MIN_BEDS} + border rule): ${validHospDestOsrm.length}`
+        `[Server] Hospitals in OSRM destination set (OPEN general acute & critical access + border rule): ${validHospDestOsrm.length}`
     );
 
     const linacGapWalmartsValidCoords = [];
@@ -467,6 +474,8 @@ async function computeMetricsForStateAbbrev(
         totalLinacs += parseInt(center['Number of LINACs'], 10) || 0;
     });
 
+    const totalHospitals = hospitalCountForState(stateAbbr, hospitals);
+
     console.log(`[Server] Metrics results (${stateAbbr}): ${walmartsOutsideCount} Walmarts outside range, ${walmartsWithinCount} within range, ${walmartsInvalidCount} invalid coordinates`);
     console.log(`[Server] State ${stateAbbr} has ${totalCenters} LINAC centers with ${totalLinacs} total LINACs`);
 
@@ -490,6 +499,7 @@ async function computeMetricsForStateAbbrev(
         totalWalmarts: stateWalmarts.length,
         cityCentersWithinRange: totalCenters,
         linacsWithinRange: totalLinacs,
+        totalHospitals,
         hospitalBackstopMinutes: HOSPITAL_BACKSTOP_MINUTES
     };
 }
@@ -542,6 +552,7 @@ app.get('/api/metrics', async (req, res) => {
             totalWalmarts: 0,
             cityCentersWithinRange: 0,
             linacsWithinRange: 0,
+            totalHospitals: 0,
             hospitalBackstopMinutes: HOSPITAL_BACKSTOP_MINUTES
         };
 
@@ -573,6 +584,9 @@ app.get('/api/metrics', async (req, res) => {
                     totals.linacsWithinRange += m.linacsWithinRange;
                 }
             }
+            totals.totalHospitals = Array.isArray(hospitalLocations)
+                ? hospitalLocations.filter(hospitalRowEligibleRoute).length
+                : 0;
             console.log('[Server] US aggregate metrics computed from state sums.');
             return res.json(totals);
         } catch (err) {
@@ -605,15 +619,35 @@ app.get('/api/metrics', async (req, res) => {
 
 app.get('/api/states', (req, res) => {
     const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
-    
-    // Get unique states from Walmart data
-    const statesFromData = [...new Set(walmartLocations.map(location => location.state))];
-    
-    // Sort states alphabetically
-    const sortedStates = statesFromData.sort();
-    
-    // Return the sorted list of states
-    res.json(sortedStates);
+    const hospitalLocations = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+
+    // Walmart-driven analysis states, plus any hospital-only territories in the fixture.
+    const statesFromData = [
+        ...new Set([
+            ...walmartLocations.map((location) => location.state),
+            ...hospitalStateCodesFromFile(hospitalLocations)
+        ].filter(Boolean))
+    ].sort();
+
+    res.json(statesFromData);
+});
+
+/** Eligible hospital inventory: OPEN + general acute / critical access (+ valid coords), grouped by STATE. */
+app.get('/api/hospital-inventory', (req, res) => {
+    const hospitals = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+    if (!Array.isArray(hospitals)) {
+        return res.json({ total: 0, byState: {} });
+    }
+    const byState = {};
+    let total = 0;
+    for (const h of hospitals) {
+        if (!hospitalRowEligibleRoute(h)) continue;
+        const code = h.STATE;
+        if (!code) continue;
+        byState[code] = (byState[code] || 0) + 1;
+        total += 1;
+    }
+    res.json({ total, byState });
 });
 
 /**
@@ -873,14 +907,18 @@ async function getDriveTimes(sources, destinations) {
 // Start the server when launched directly (`node server.js`), not when required by tests.
 module.exports = {
     app,
+    getDriveTimes,
+    loadDataFromFile,
     linacRowsForDriveTimeOsrm,
     linacRowHasValidCoords,
     walmartRowHasValidCoords,
     hospitalRowsForDriveTimeOsrm,
     hospitalRowEligibleRoute,
+    hospitalCountForState,
+    hospitalStateCodesFromFile,
     hospitalEligibleType,
-    hospitalMeetsBedThreshold,
     HOSPITAL_BACKSTOP_MINUTES,
+    HOSPITAL_BACKSTOP_THRESHOLD_SECONDS,
     geoLatLonFromRow
 };
 

@@ -19,3 +19,7 @@ Thumbs.db
 
 # Claude Code per-project tooling
 .claude/
+
+# Offline OSRM analysis outputs (regenerate via scripts/gap-backstop-hospital-type.js)
+scripts/output/
+scripts/gap-backstop-result.txt
