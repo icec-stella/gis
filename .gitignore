@@ -23,3 +23,4 @@ Thumbs.db
 # Offline OSRM analysis outputs (regenerate via scripts/gap-backstop-hospital-type.js)
 scripts/output/
 scripts/gap-backstop-result.txt
+scripts/cache/

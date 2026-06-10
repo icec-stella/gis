@@ -175,8 +175,10 @@ LINAC/
 │   ├── linac-locations.json     # LINAC records (name, Cities, States, lat/lng, counts)
 │   └── hospital-locations.json  # HIFLD-style hospitals (optional; OPEN, TYPE ∈ {GENERAL ACUTE CARE, CRITICAL ACCESS}, valid coords)
 ├── scripts/
-│   ├── gap-backstop-hospital-type.js   # Offline OSRM report: viable-gap × nearest hospital TYPE (see METHODOLOGY §10)
-│   └── output/                         # Generated CSV/MD/JSON (not committed by default)
+│   ├── gap-backstop-hospital-type.js        # Offline OSRM report: viable-gap × nearest hospital TYPE (METHODOLOGY §10)
+│   ├── viable-gap-census-population.js      # Tier 1: city × Census place population (§10.4)
+│   ├── viable-gap-catchment-population.js   # Tier 2: 30-min OSRM tract catchment union (§10.5)
+│   └── output/                              # Generated CSV/MD/JSON (not committed by default)
 ├── docs/
 │   ├── METHODOLOGY.md      # Scientific methodology (metrics + supplementary TYPE report)
 │   └── PROJECT.md          # This file

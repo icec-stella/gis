@@ -279,6 +279,63 @@ node scripts/gap-backstop-hospital-type.js
 
 **Slider note.** The batch script fixes LINAC time at 60 minutes. Changing the in-app LINAC slider changes which stores are LINAC-gap and therefore changes viable counts and TYPE splits; re-run the script (or add a `driveTimeMinutes` parameter in a future revision) to match a non-default threshold.
 
+### 10.4 Population crosswalk (Census Bureau)
+
+Each viable-gap Walmart carries a `city` and `state` in the fixture data. An offline script joins those city–state pairs to **U.S. Census Bureau population estimates** so reviewers can approximate how many people live in the communities behind the gap list.
+
+**How to reproduce**
+
+```bash
+node scripts/viable-gap-census-population.js
+```
+
+(Requires `scripts/output/gap-backstop-analysis.json` from §10.3.)
+
+**Primary source:** Census Population Estimates Program file `sub-est2024.csv` (July 1, **2024** place estimates, `POPESTIMATE2024`), downloaded on first run to `scripts/cache/`. Incorporated places and New England towns (`SUMLEV` 162 and 061) are matched to Walmart `city` strings after normalizing Census administrative suffixes (`city`, `town`, `CDP`, etc.). A small set of **CDPs and Puerto Rico municipios** not present in that file use **2020 Decennial Census** counts instead (documented in the script as `manual_2020_census`).
+
+**Outputs** (`scripts/output/`):
+
+| File | Contents |
+|---|---|
+| `viable-gap-walmarts-with-population.csv` | All 342 stores with census place name + population |
+| `viable-gap-cities-population.csv` | **322** unique city–state pairs with population and store count |
+| `viable-gap-population-summary.json` | Match statistics and deduplicated population total |
+
+**How to interpret the total.** Summing populations across the **322 unique cities** (~3.87M at the current data vintage) is **not** a precise count of people affected by LINAC gaps: Walmart `city` is mailing-address geography (not a census tract), multiple stores in one city are counted once in the city table, and place population ≠ the full trade-area catchment of each store. It is a useful **order-of-magnitude** crosswalk for policy discussion, not a substitute for census-block or catchment analysis.
+
+### 10.5 Tier 2: drive-time catchment population (tract union)
+
+A stronger offline estimate sums **2020 Census tract populations** for residents within a fixed **OSRM drive-time catchment** of each viable-gap Walmart, then **deduplicates** tracts across stores so each tract is counted once in the national total.
+
+**How to reproduce**
+
+```bash
+node scripts/viable-gap-catchment-population.js
+```
+
+Optional: `CATCHMENT_MINUTES=30` (default), `CATCHMENT_RADIUS_MILES=40` (Haversine prefilter), `CATCHMENT_STORE_LIMIT=5` (smoke test).
+
+**Method (per store)**
+
+1. Resolve store coordinates from `walmart-locations.json` (read-only join on state / name / city / address).
+2. Pre-filter **2020 Census tracts** whose internal point lies within `CATCHMENT_RADIUS_MILES` straight-line of the store (Census Bureau `CenPop2020_Mean_TR.txt`, cached under `scripts/cache/`).
+3. OSRM Table from store → candidate tract centroids; include tract if drive time ≤ `CATCHMENT_MINUTES` (default **30**, independent of the hospital backstop threshold).
+4. **Union** included tract GEOIDs across all stores; sum tract `POPULATION` once per GEOID.
+
+Puerto Rico stores use **2020 municipio population** fallback (tract file covers only the 50 states + DC).
+
+**Outputs** (`scripts/output/`)
+
+| File | Contents |
+|---|---|
+| `viable-gap-catchment-summary.json` | Union total, naive overlap sum, tract count, Tier 1 comparison |
+| `viable-gap-catchment-by-store.csv` | Per-store tract count and catchment population |
+| `viable-gap-catchment-tracts-union.csv` | Deduplicated tract list in the national union |
+
+Original datasets under `src/data/` are never modified; all Tier 2 artifacts live under `scripts/output/` and `scripts/cache/`.
+
+**Remaining gaps vs. publication.** Tract **centroids** approximate reachability (not areal intersection of tract polygons with isochrones). Population is **2020 decennial**, not ACS with margins of error. OSRM uses the public demo router. Block-group areal weighting, self-hosted OSRM, and ACS vintage harmonization are the next hardening steps.
+
 ---
 
 ## 11. Limitations
