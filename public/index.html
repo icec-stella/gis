@@ -35,8 +35,33 @@
                     <button id="analyze" class="btn btn-primary w-100">Run Analysis</button>
                 </div>
 
-                <!-- Add the new button -->
-                <button id="toggle-walmarts" class="btn btn-outline-secondary w-100 mt-3 rounded">Hide Walmarts</button>
+                <!-- Map layer toggles -->
+                <div id="layer-toggle-container" class="mt-3 p-2 border rounded bg-white">
+                    <div class="fw-semibold small text-muted mb-2">Map Layers</div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="layer-walmarts" checked>
+                        <label class="form-check-label" for="layer-walmarts">Walmarts</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="layer-hospitals" checked>
+                        <label class="form-check-label" for="layer-hospitals">Hospitals</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="layer-linac" checked>
+                        <label class="form-check-label" for="layer-linac">LINAC Centers</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="layer-gaps" disabled>
+                        <label class="form-check-label" for="layer-gaps">LINAC Gaps</label>
+                    </div>
+                </div>
+
+                <div id="gap-explainer" class="mt-3 p-2 border rounded bg-white small text-muted">
+                    <div class="fw-semibold text-body mb-1">How to read the map</div>
+                    <p class="mb-1"><strong>LINAC gaps</strong> are Walmart locations with no LINAC (radiation therapy) center within the selected drive time, measured using OSRM road-network routing.</p>
+                    <p class="mb-1"><strong>Viable gaps</strong> still have a general acute or critical access hospital within ~30 min — a possible host site for a future LINAC.</p>
+                    <p class="mb-0"><strong>Systemic gaps</strong> have neither a LINAC nor a qualifying hospital in range. Use <em>Map Layers</em> above to toggle each set on or off.</p>
+                </div>
 
                 <div id="location-toggle-container" class="btn-group w-100 mt-3 d-none" role="group" aria-label="Location Toggle">
                     <input type="radio" class="btn-check" name="location-toggle" id="linac-toggle" autocomplete="off" checked>

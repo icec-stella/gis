@@ -72,6 +72,10 @@ body {
     height: 20px;
 }
 
+.legend .legend-count {
+    font-size: 0.75rem;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
     #dashboard-metrics {
@@ -403,6 +407,30 @@ body {
     pointer-events: none;
 }
 
+.analysis-loading {
+    width: 340px;
+    max-width: 80vw;
+    padding: 24px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.analysis-loading .progress {
+    height: 12px;
+}
+
+.analysis-progress-label {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #0d6efd;
+    line-height: 1;
+}
+
+.analysis-loading-note {
+    line-height: 1.35;
+}
+
 /* Dark mode styles */
 .dark-mode body {
     background-color: #121212;
@@ -416,7 +444,7 @@ body {
 .dark-mode #location-toggle-container,
 .dark-mode #loading-spinner,
 .dark-mode .custom-modal,
-.dark-mode #toggle-walmarts,
+.dark-mode #layer-toggle-container,
 .dark-mode .metrics-table-container {
     background-color: #1e1e1e;
     color: #e0e0e0;

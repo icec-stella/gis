@@ -588,6 +588,9 @@ app.get('/api/metrics', async (req, res) => {
                     if (Array.isArray(m.linacGapWalmartPins)) {
                         totals.linacGapWalmartPins.push(...m.linacGapWalmartPins);
                     }
+                    if (Array.isArray(m.systemicGapWalmartPins)) {
+                        totals.systemicGapWalmartPins.push(...m.systemicGapWalmartPins);
+                    }
                     totals.totalWalmarts += m.totalWalmarts;
                     totals.cityCentersWithinRange += m.cityCentersWithinRange;
                     totals.linacsWithinRange += m.linacsWithinRange;

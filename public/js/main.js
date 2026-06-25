@@ -3,14 +3,19 @@ let map;
 let walmartMarkers = [];
 let linacMarkers = [];
 let hospitalMarkers = [];
-/** Purple ring markers — OSRM systemic-gap Walmarts; not affected by Hide Walmarts. */
-let systemicGapMarkers = [];
 let stateLayer;
 let usBoundaryLayer;
 let legendControl; // Add global reference to legend control
-let walmartsHidden = false; // Track if Walmarts are being hidden
-/** OSRM LINAC-gap pin keys from the latest /api/metrics response (lat,lng at 7 dp). */
+/** Whether per-state OSRM gap classification has been computed for the current state + drive time. */
+let gapsComputed = false;
+/** OSRM gap pin keys from the latest /api/metrics response (lat,lng at 7 dp). */
 let osrmLinacGapPinKeys = null;
+let osrmSystemicGapPinKeys = null;
+/** Counts + context from the latest gap classification (drive the dynamic legend + popups). */
+let gapViableCount = 0;
+let gapSystemicCount = 0;
+let gapContextMinutes = null;
+let gapContextHospMin = null;
 
 /**
  * Fixed hospital backstop drive-time ceiling — must match server.js HOSPITAL_BACKSTOP_MINUTES.
@@ -86,30 +91,39 @@ const yellowMarkerIcon = L.icon({
     popupAnchor: [1, -17]
 });
 
+// Marker stacking priority (added to Leaflet's latitude-based z-index): systemic gaps on top, hospitals at bottom.
+const Z_INDEX_SYSTEMIC = 4000;
+const Z_INDEX_GAP = 3000;
+const Z_INDEX_WALMART = 2000;
+const Z_INDEX_LINAC = 1000;
+const Z_INDEX_HOSPITAL = 0;
+
+const greenMarkerIcon = L.icon({
+    iconUrl: '/images/markers/marker-icon-green.png',
+    iconSize: [12, 20],
+    iconAnchor: [6, 20],
+    popupAnchor: [1, -17]
+});
+
+const orangeMarkerIcon = L.icon({
+    iconUrl: '/images/markers/marker-icon-orange.png',
+    iconSize: [12, 20],
+    iconAnchor: [6, 20],
+    popupAnchor: [1, -17]
+});
+
+const violetMarkerIcon = L.icon({
+    iconUrl: '/images/markers/marker-icon-violet.png',
+    iconSize: [12, 20],
+    iconAnchor: [6, 20],
+    popupAnchor: [1, -17]
+});
+
 function escapePopupText(s) {
     return String(s ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/"/g, '&quot;');
-}
-
-/**
- * Find the blue Walmart marker whose source row matches a systemic-gap pin's coordinates.
- * Both the marker (via marker.walmartData.latitude/longitude) and the pin originate from the
- * same JSON row, so equality is exact in practice; the small epsilon is defensive.
- */
-function findWalmartMarkerByCoords(lat, lng) {
-    const EPS = 1e-9;
-    for (const m of walmartMarkers) {
-        const w = m.walmartData;
-        if (!w) continue;
-        const wlat = Number(w.latitude);
-        const wlng = Number(w.longitude);
-        if (Math.abs(wlat - lat) < EPS && Math.abs(wlng - lng) < EPS) {
-            return m;
-        }
-    }
-    return null;
 }
 
 function pinCoordKey(lat, lng) {
@@ -129,176 +143,135 @@ function buildLinacGapPinKeySet(pins) {
     return set;
 }
 
-function setOsrmLinacGapPinsFromMetrics(metrics) {
-    osrmLinacGapPinKeys = buildLinacGapPinKeySet(metrics && metrics.linacGapWalmartPins);
-    return osrmLinacGapPinKeys;
-}
-
-function isWalmartMarkerOsrmLinacGap(marker, gapKeys) {
-    const w = marker.walmartData;
-    if (!w || !gapKeys) {
-        return false;
-    }
-    const lat = Number(w.latitude);
-    const lng = Number(w.longitude);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        return false;
-    }
-    return gapKeys.has(pinCoordKey(lat, lng));
-}
-
-/** Show only OSRM LINAC-gap Walmarts in the selected scope; hide all others. */
-function applyOsrmLinacGapVisibility(gapKeys, selectedState) {
-    let hiddenCount = 0;
-    let visibleGapCount = 0;
-
-    walmartMarkers.forEach((marker) => {
-        if (marker._hiddenBySystemicGap) {
-            return;
-        }
-        const w = marker.walmartData;
-        if (!w) {
-            return;
-        }
-
-        const inScope = selectedState === 'US' || w.state === selectedState;
-        if (!inScope) {
-            marker.setOpacity(0);
-            marker.closePopup();
-            hiddenCount++;
-            return;
-        }
-
-        if (isWalmartMarkerOsrmLinacGap(marker, gapKeys)) {
-            marker.setOpacity(1);
-            visibleGapCount++;
-        } else {
-            marker.setOpacity(0);
-            marker.closePopup();
-            hiddenCount++;
-        }
-    });
-
-    return { hiddenCount, visibleGapCount };
-}
-
-function clearSystemicGapMarkers() {
-    if (map) {
-        systemicGapMarkers.forEach((layer) => {
-            try {
-                map.removeLayer(layer);
-            } catch (e) {
-                /* noop */
-            }
-        });
-    }
-    systemicGapMarkers = [];
-
-    // Restore Walmart pins that were hidden specifically because a systemic-gap ring covered them.
-    // If Hide Walmarts is on, re-apply OSRM gap visibility for the current state.
-    const selectedState = document.getElementById('state')?.value;
-    walmartMarkers.forEach((marker) => {
-        if (!marker._hiddenBySystemicGap) return;
-        marker._hiddenBySystemicGap = false;
-        if (!walmartsHidden) {
-            marker.setOpacity(1);
-            return;
-        }
-    });
-    if (walmartsHidden && osrmLinacGapPinKeys && selectedState && selectedState !== 'all') {
-        applyOsrmLinacGapVisibility(osrmLinacGapPinKeys, selectedState);
-    }
+/** Current state of the four map-layer toggles. `gaps` is only effective once gaps are computed. */
+function getLayerState() {
+    const gapsToggle = document.getElementById('layer-gaps');
+    return {
+        walmarts: !!document.getElementById('layer-walmarts')?.checked,
+        hospitals: !!document.getElementById('layer-hospitals')?.checked,
+        linac: !!document.getElementById('layer-linac')?.checked,
+        gaps: !!(gapsToggle && gapsToggle.checked && !gapsToggle.disabled && gapsComputed)
+    };
 }
 
 /**
- * Purple rings — Walmart locations that are OSRM systemic gaps (no LINAC + no general acute or
- * critical access hospital ≤ cutoff). The ring is the authoritative symbol at these locations;
- * the underlying blue Walmart pin is hidden to give every location exactly one visual marker.
+ * Tag every Walmart marker with its OSRM gap classification from a /api/metrics response.
+ * Systemic gaps (no LINAC + no hospital backstop) are a subset of LINAC gaps. The visual
+ * representation (icon/visibility) is applied separately by applyLayerVisibility().
  */
-function syncSystemicGapPinsFromMetrics(metrics) {
-    setOsrmLinacGapPinsFromMetrics(metrics);
-    clearSystemicGapMarkers();
-    const st = document.getElementById('state')?.value;
-    if (!map || !st || st === 'all') {
-        updateLegend();
-        return;
-    }
-    if (st === 'US') {
-        if (walmartsHidden && osrmLinacGapPinKeys) {
-            applyOsrmLinacGapVisibility(osrmLinacGapPinKeys, 'US');
-            updateLocationList();
-        }
-        updateLegend();
-        return;
-    }
-    const minutes = getDriveTimeMinutes();
-    const hospMin = metrics && Number.isFinite(metrics.hospitalBackstopMinutes)
-        ? metrics.hospitalBackstopMinutes
-        : HOSPITAL_BACKSTOP_MINUTES;
-    const pins = metrics && Array.isArray(metrics.systemicGapWalmartPins) ? metrics.systemicGapWalmartPins : [];
-    pins.forEach((p) => {
-        const lat = p.latitude;
-        const lng = p.longitude;
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-            return;
-        }
-        const cm = L.circleMarker([lat, lng], {
-            radius: 11,
-            weight: 3,
-            color: '#4a148c',
-            fillColor: '#e1bee7',
-            fillOpacity: 0.95
-        }).addTo(map);
-        try {
-            if (typeof cm.bringToFront === 'function') {
-                cm.bringToFront();
-            }
-        } catch (e) {
-            /* noop */
-        }
-        const addrParts = [];
-        if (p.street_address && String(p.street_address).trim()) {
-            addrParts.push(String(p.street_address).trim());
-        }
-        let cityLine = '';
-        const cty = p.city != null ? String(p.city).trim() : '';
-        const sta = p.state != null ? String(p.state).trim() : '';
-        if (cty && sta) {
-            cityLine = `${cty}, ${sta}`;
-        } else if (cty || sta) {
-            cityLine = cty || sta;
-        }
-        if (cityLine) {
-            addrParts.push(cityLine);
-        }
-        const addrHtml = addrParts.map(escapePopupText).join('<br>');
-        cm.bindPopup(
-            `<strong>Systemic gap</strong> (OSRM)<br>No LINAC within ${escapePopupText(minutes)} min and no general acute or critical access hospital within ${escapePopupText(hospMin)} min.<br>${escapePopupText(p.name || '')}${addrHtml ? `<br>${addrHtml}` : ''}`
-        );
-        cm.on('click', () => {
-            flyMapTo(L.latLng(lat, lng), 14);
-            cm.openPopup();
-        });
-        systemicGapMarkers.push(cm);
+function classifyWalmartGaps(metrics) {
+    const gapKeys = buildLinacGapPinKeySet(metrics && metrics.linacGapWalmartPins);
+    const systemicKeys = buildLinacGapPinKeySet(metrics && metrics.systemicGapWalmartPins);
+    osrmLinacGapPinKeys = gapKeys;
+    osrmSystemicGapPinKeys = systemicKeys;
 
-        // Suppress the blue Walmart pin at this location — the ring is the authoritative symbol.
-        const underlying = findWalmartMarkerByCoords(lat, lng);
-        if (underlying) {
-            underlying._hiddenBySystemicGap = true;
-            underlying.setOpacity(0);
-            underlying.closePopup();
+    let viable = 0;
+    let systemic = 0;
+    walmartMarkers.forEach((marker) => {
+        const w = marker.walmartData;
+        let isSystemic = false;
+        let isGap = false;
+        if (w) {
+            const lat = Number(w.latitude);
+            const lng = Number(w.longitude);
+            if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                const key = pinCoordKey(lat, lng);
+                isSystemic = systemicKeys.has(key);
+                isGap = isSystemic || gapKeys.has(key);
+            }
+        }
+        marker._isLinacGap = isGap;
+        marker._isSystemicGap = isSystemic;
+        if (isGap) {
+            if (isSystemic) systemic++; else viable++;
         }
     });
-    if (pins.length > 0) {
-        console.log(
-            `[Map] ${pins.length} systemic-gap location(s) — purple rings (OSRM classification)`
-        );
+
+    gapViableCount = viable;
+    gapSystemicCount = systemic;
+    gapContextMinutes = getDriveTimeMinutes();
+    gapContextHospMin = metrics && Number.isFinite(metrics.hospitalBackstopMinutes)
+        ? metrics.hospitalBackstopMinutes
+        : HOSPITAL_BACKSTOP_MINUTES;
+}
+
+/** Popup HTML for a Walmart marker depending on how it is currently being shown. */
+function walmartPopupHTML(marker, mode) {
+    const w = marker.walmartData || {};
+    const addr = [
+        w.street_address ? String(w.street_address) : '',
+        [w.city, w.state].filter(Boolean).join(', ')
+    ].filter(Boolean).map(escapePopupText).join('<br>');
+    const name = escapePopupText(w.name || 'Walmart');
+    const tail = `${name}${addr ? `<br>${addr}` : ''}`;
+    if (mode === 'systemic') {
+        return `<strong>Walmart — Systemic gap</strong> (OSRM)<br>No LINAC within ${escapePopupText(gapContextMinutes)} min and no general acute or critical access hospital within ${escapePopupText(gapContextHospMin)} min.<br>${tail}`;
     }
-    if (walmartsHidden && osrmLinacGapPinKeys && st && st !== 'all') {
-        applyOsrmLinacGapVisibility(osrmLinacGapPinKeys, st);
-        updateLocationList();
+    if (mode === 'gap') {
+        return `<strong>Walmart — LINAC gap</strong> (OSRM)<br>No LINAC within ${escapePopupText(gapContextMinutes)} min.<br>${tail}`;
     }
-    updateLegend();
+    return `<strong>Walmart</strong><br>${tail}`;
+}
+
+/**
+ * Apply the current layer-toggle state to all markers. A Walmart that is a gap renders red/violet
+ * only while the LINAC Gaps layer is on; otherwise it renders as a plain blue Walmart (or hides).
+ */
+function applyLayerVisibility() {
+    const ls = getLayerState();
+
+    hospitalMarkers.forEach((m) => {
+        m.setOpacity(ls.hospitals ? 1 : 0);
+        if (!ls.hospitals) m.closePopup();
+    });
+    linacMarkers.forEach((m) => {
+        m.setOpacity(ls.linac ? 1 : 0);
+        if (!ls.linac) m.closePopup();
+    });
+
+    walmartMarkers.forEach((marker) => {
+        let mode = null;
+        if (ls.gaps && marker._isLinacGap) {
+            mode = marker._isSystemicGap ? 'systemic' : 'gap';
+            marker.setIcon(mode === 'systemic' ? violetMarkerIcon : redMarkerIcon);
+            marker.setZIndexOffset(mode === 'systemic' ? Z_INDEX_SYSTEMIC : Z_INDEX_GAP);
+            marker.setOpacity(1);
+        } else if (ls.walmarts) {
+            mode = 'walmart';
+            marker.setIcon(blueMarkerIcon);
+            marker.setZIndexOffset(Z_INDEX_WALMART);
+            marker.setOpacity(1);
+        } else {
+            marker.setOpacity(0);
+            marker.closePopup();
+        }
+        marker._popupMode = mode;
+        if (mode) {
+            marker.setPopupContent(walmartPopupHTML(marker, mode));
+        }
+    });
+}
+
+/** Discard any computed gap classification (e.g. when state or drive time changes). */
+function invalidateGaps() {
+    gapsComputed = false;
+    osrmLinacGapPinKeys = null;
+    osrmSystemicGapPinKeys = null;
+    gapViableCount = 0;
+    gapSystemicCount = 0;
+    walmartMarkers.forEach((m) => {
+        m._isLinacGap = false;
+        m._isSystemicGap = false;
+    });
+    const gapsToggle = document.getElementById('layer-gaps');
+    if (gapsToggle) {
+        gapsToggle.checked = false;
+        gapsToggle.disabled = true;
+    }
+    if (map) {
+        applyLayerVisibility();
+        updateLegend();
+    }
 }
 
 // Add state code to name mapping
@@ -503,7 +476,8 @@ async function loadInitialMarkers() {
             // Only add marker if within US bounds
             if (usBoundaryLayer && usBoundaryLayer.getBounds().contains(latLng)) {
                 const marker = L.marker(latLng, {
-                    icon: blueMarkerIcon
+                    icon: blueMarkerIcon,
+                    zIndexOffset: Z_INDEX_WALMART
                 }).addTo(map);
 
                 // Attach source row so the sidebar can bucket by w.state (matches /api/metrics)
@@ -552,7 +526,8 @@ async function loadInitialMarkers() {
             if (isValidUSCoordinate(parseFloat(location.Latitude), parseFloat(location.Longitude)) &&
                 (!usBoundaryLayer || usBoundaryLayer.getBounds().contains(latLng))) {
                 const marker = L.marker(latLng, {
-                    icon: redMarkerIcon
+                    icon: greenMarkerIcon,
+                    zIndexOffset: Z_INDEX_LINAC
                 }).addTo(map);
                 
                 // Store the original LINAC data with the marker for side nav access
@@ -588,7 +563,8 @@ async function loadInitialMarkers() {
                 (!usBoundaryLayer || usBoundaryLayer.getBounds().contains(latLng))
             ) {
                 const marker = L.marker(latLng, {
-                    icon: yellowMarkerIcon
+                    icon: orangeMarkerIcon,
+                    zIndexOffset: Z_INDEX_HOSPITAL
                 }).addTo(map);
                 marker.hospitalData = hospital;
                 marker.bindPopup(`
@@ -646,46 +622,33 @@ function initializeEventListeners() {
     const stateSelect = document.getElementById('state');
     const analyzeButton = document.getElementById('analyze');
 
-    driveTimeSlider.addEventListener('input', async (e) => {
+    // Drive time changes invalidate any computed gaps (they are drive-time specific); the user
+    // must Run Analysis again to recompute. The other layers are unaffected.
+    driveTimeSlider.addEventListener('input', (e) => {
         const minutes = e.target.value;
         driveTimeValueLabel.textContent = minutes;
         console.log(`[Frontend] Max drive time changed to: ${minutes} min`);
-        
-        if (walmartsHidden) {
-            updateLegend();
+        if (gapsComputed) {
+            invalidateGaps();
         }
-        
-        if (stateSelect.value && stateSelect.value !== 'all') {
-            const selectedState = stateSelect.value;
-            
-            try {
-                const q = `state=${encodeURIComponent(selectedState)}&driveTimeMinutes=${encodeURIComponent(minutes)}`;
-                console.log(`[Frontend] Fetching metrics for ${q}`);
-                const response = await fetch(`/api/metrics?${q}`);
-                const metrics = await parseJsonOrThrow(response);
-                console.log('[Frontend] Received metrics:', metrics);
+    });
 
-                syncSystemicGapPinsFromMetrics(metrics);
+    // Changing the state also invalidates gaps until the next Run Analysis.
+    stateSelect.addEventListener('change', () => {
+        if (gapsComputed) {
+            invalidateGaps();
+        }
+    });
 
-                if (!document.getElementById('dashboard-modal').classList.contains('d-none')) {
-                    document.getElementById('modal-dashboard-metrics').innerHTML = formatDashboardCardsHTML(
-                        metrics,
-                        minutes
-                    );
-                }
-                
-                if (document.getElementById('metrics-table-body')) {
-                    createMetricsTable();
-                }
-            } catch (error) {
-                console.error('Error updating metrics:', error);
-                const modal = document.getElementById('dashboard-modal');
-                const mEl = document.getElementById('modal-dashboard-metrics');
-                if (mEl && modal && !modal.classList.contains('d-none')) {
-                    const safe = String(error.message || error).replace(/</g, '&lt;');
-                    mEl.innerHTML = `<div class="alert alert-danger m-3" role="alert">${safe}</div>`;
-                }
-            }
+    // Map layer toggles — pure show/hide, no recompute.
+    ['layer-walmarts', 'layer-hospitals', 'layer-linac', 'layer-gaps'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('change', () => {
+                applyLayerVisibility();
+                updateLegend();
+                updateLocationList();
+            });
         }
     });
 
@@ -757,7 +720,6 @@ function initializeEventListeners() {
                 metrics,
                 minutes
             );
-            syncSystemicGapPinsFromMetrics(metrics);
         } catch (error) {
             console.error('Error fetching metrics:', error);
             const safe = String(error.message || error).replace(/</g, '&lt;');
@@ -783,37 +745,6 @@ function initializeEventListeners() {
         document.getElementById('dashboard-modal').classList.add('d-none');
     });
 
-    // Update toggle Walmarts button listener
-    const toggleWalmartsBtn = document.getElementById('toggle-walmarts');
-    console.log('Toggle button found:', toggleWalmartsBtn); // Check if button exists
-    console.log('Toggle button text:', toggleWalmartsBtn?.textContent); // Check initial text
-
-    toggleWalmartsBtn.addEventListener('click', async () => {
-        console.log('Toggle button clicked!'); // Log when clicked
-        const isHiding = toggleWalmartsBtn.textContent === 'Hide Walmarts';
-        console.log('isHiding:', isHiding); // Log the state
-        const selectedState = document.getElementById('state').value;
-        console.log('selectedState:', selectedState); // Log selected state
-        
-        // Allow toggling for US view or when a specific state is selected
-        if (selectedState === 'US' || (selectedState && selectedState !== 'all')) {
-            console.log('Condition met, proceeding with toggle'); // Log if condition is met
-            if (isHiding) {
-                await hideWalmartsNearLinac();
-                toggleWalmartsBtn.textContent = 'Show All Walmarts';
-                walmartsHidden = true; // Set state to hidden
-            } else {
-                showAllWalmarts();
-                toggleWalmartsBtn.textContent = 'Hide Walmarts';
-                walmartsHidden = false; // Set state to shown
-            }
-            // Update legend to reflect the new state
-            updateLegend();
-        } else {
-            console.log('Toggle condition not met'); // Log if condition fails
-        }
-    });
-
     // Add table view button listener
     document.getElementById('table-view-button').addEventListener('click', () => {
         document.getElementById('modal-overlay').classList.remove('d-none');
@@ -827,7 +758,6 @@ function clearMap() {
     walmartMarkers.forEach((marker) => marker.remove());
     linacMarkers.forEach((marker) => marker.remove());
     hospitalMarkers.forEach((marker) => marker.remove());
-    clearSystemicGapMarkers();
     walmartMarkers = [];
     linacMarkers = [];
     hospitalMarkers = [];
@@ -944,6 +874,59 @@ function showLoading() {
     document.body.appendChild(overlay);
 }
 
+/**
+ * Loading overlay for Run Analysis. A single OSRM request gives no real sub-progress, so the bar
+ * eases toward ~95% while the request is in flight and jumps to 100% on completion. Returns a
+ * handle with finish() to call once the work is done.
+ */
+function showAnalysisLoading(note) {
+    const existing = document.getElementById('loading-overlay');
+    if (existing) existing.remove();
+
+    const message = note || 'Running intensive OSRM drive-time calculations — this can take a minute or two.';
+
+    const overlay = document.createElement('div');
+    overlay.id = 'loading-overlay';
+    overlay.innerHTML = `
+        <div class="analysis-loading text-center">
+            <div id="analysis-progress-label" class="analysis-progress-label mb-2">0%</div>
+            <div class="progress mb-3" role="progressbar" aria-label="Analysis progress">
+                <div id="analysis-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+            </div>
+            <div class="analysis-loading-note text-muted small">${message}</div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const bar = overlay.querySelector('#analysis-progress-bar');
+    const label = overlay.querySelector('#analysis-progress-label');
+    let pct = 0;
+    let done = false;
+
+    const timer = setInterval(() => {
+        if (done) return;
+        // Ease toward 95% (slows as it approaches), then hold until finish().
+        pct += Math.max(0.4, (95 - pct) * 0.05);
+        if (pct > 95) pct = 95;
+        if (bar) bar.style.width = `${pct}%`;
+        if (label) label.textContent = `${Math.round(pct)}%`;
+    }, 200);
+
+    return {
+        finish() {
+            if (done) return;
+            done = true;
+            clearInterval(timer);
+            if (bar) bar.style.width = '100%';
+            if (label) label.textContent = '100%';
+            setTimeout(() => {
+                overlay.classList.add('fade-out');
+                setTimeout(() => overlay.remove(), 300);
+            }, 250);
+        }
+    };
+}
+
 // Update hideLoading function to include a smooth transition
 function hideLoading() {
     const overlay = document.getElementById('loading-overlay');
@@ -1054,16 +1037,15 @@ async function updateAnalysis() {
         return;
     }
 
+    let progress = null;
     try {
-        showLoading();
+        const loadingNote = state === 'US'
+            ? 'Running intensive OSRM drive-time calculations for every state — the nationwide run can take several minutes.'
+            : 'Running intensive OSRM drive-time calculations — this can take a minute or two.';
+        progress = showAnalysisLoading(loadingNote);
 
-        // Reset Walmarts visibility state when a new state is selected
-        // This ensures the button text and legend match the actual map state
-        walmartsHidden = false;
-        osrmLinacGapPinKeys = null;
-        const toggleWalmartsBtn = document.getElementById('toggle-walmarts');
-        toggleWalmartsBtn.textContent = 'Hide Walmarts';
-        updateLegend(); // Update legend to show "Walmart Locations"
+        // A fresh analysis invalidates any previously computed gaps until this one completes.
+        gapsComputed = false;
 
         // Show the "Dashboard" button
         document.getElementById('dashboard-button').classList.remove('d-none');
@@ -1078,19 +1060,8 @@ async function updateAnalysis() {
             usBoundaryLayer = null;
         }
 
-        // Hide all markers first
-        walmartMarkers.forEach(marker => {
-            marker.setOpacity(0);
-            marker.closePopup();
-        });
-        linacMarkers.forEach(marker => {
-            marker.setOpacity(0);
-            marker.closePopup();
-        });
-        hospitalMarkers.forEach((marker) => {
-            marker.setOpacity(0);
-            marker.closePopup();
-        });
+        const minutes = getDriveTimeMinutes();
+        let metrics;
 
         if (state === 'US') {
             // Clear any existing state boundary
@@ -1098,11 +1069,6 @@ async function updateAnalysis() {
                 map.removeLayer(stateLayer);
                 stateLayer = null;
             }
-            
-            // Show all markers for US view
-            walmartMarkers.forEach(marker => marker.setOpacity(1));
-            linacMarkers.forEach(marker => marker.setOpacity(1));
-            hospitalMarkers.forEach((m) => m.setOpacity(1));
 
             // Set view to continental US
             map.setView([39.8283, -98.5795], 4);
@@ -1120,44 +1086,48 @@ async function updateAnalysis() {
                 }).addTo(map);
             }
 
-            // Get nationwide metrics from server
-            const minutes = getDriveTimeMinutes();
             const metricsResponse = await fetch(
                 `/api/metrics?state=US&driveTimeMinutes=${encodeURIComponent(minutes)}`
             );
-            const metrics = await parseJsonOrThrow(metricsResponse);
-
-            displayMetrics(metrics);
-            syncSystemicGapPinsFromMetrics(metrics);
+            metrics = await parseJsonOrThrow(metricsResponse);
         } else {
             // Load state boundary and wait for result
             const boundaryLoaded = await loadStateBoundary(state);
-            
             if (!boundaryLoaded || !stateLayer) {
                 throw new Error('Failed to load state boundary');
             }
 
-            // Show all markers, regardless of state boundaries
-            walmartMarkers.forEach(marker => marker.setOpacity(1));
-            linacMarkers.forEach(marker => marker.setOpacity(1));
-            hospitalMarkers.forEach((m) => m.setOpacity(1));
-
-            // Get state metrics from server
-            const minutes = getDriveTimeMinutes();
             const response = await fetch(
                 `/api/metrics?state=${encodeURIComponent(state)}&driveTimeMinutes=${encodeURIComponent(minutes)}`
             );
-            const metrics = await parseJsonOrThrow(response);
-
-            displayMetrics(metrics);
-            syncSystemicGapPinsFromMetrics(metrics);
+            metrics = await parseJsonOrThrow(response);
         }
 
+        // Classify gaps, then default the view to LINAC Centers + LINAC Gaps only (Walmarts and
+        // Hospitals off, but still available to toggle on). Render everything per the toggles.
+        classifyWalmartGaps(metrics);
+        gapsComputed = true;
+        const gapsToggle = document.getElementById('layer-gaps');
+        if (gapsToggle) {
+            gapsToggle.disabled = false;
+            gapsToggle.checked = true;
+        }
+        const walmartsToggle = document.getElementById('layer-walmarts');
+        if (walmartsToggle) walmartsToggle.checked = false;
+        const hospitalsToggle = document.getElementById('layer-hospitals');
+        if (hospitalsToggle) hospitalsToggle.checked = false;
+        const linacToggle = document.getElementById('layer-linac');
+        if (linacToggle) linacToggle.checked = true;
+
+        displayMetrics(metrics);
+        applyLayerVisibility();
+        updateLegend();
         updateLocationList();
-        hideLoading();
+
+        if (progress) progress.finish();
     } catch (error) {
         console.error('Error updating analysis:', error);
-        hideLoading();
+        if (progress) progress.finish();
     }
 }
 
@@ -1174,9 +1144,7 @@ function updateLocationList() {
         walmartMarkers.forEach(marker => {
             // Bucket by the store's declared state field — matches /api/metrics. Previously used
             // point-in-polygon, which silently disagreed with the dashboard on border / mislabeled rows.
-            // A ring-covered Walmart is suppressed on the map but still belongs in the sidebar list
-            // — its identity isn't lost, it's just visualized as a systemic-gap ring.
-            const isVisuallyPresent = marker.options.opacity !== 0 || marker._hiddenBySystemicGap;
+            const isVisuallyPresent = marker.options.opacity !== 0;
             let shouldShow = false;
 
             if (selectedState === 'US') {
@@ -1274,64 +1242,15 @@ async function initializeApp() {
     document.getElementById('location-toggle-container').classList.add('d-none');
     
     await populateStateDropdown();
+
+    // Apply the default layer toggles (Walmarts + Hospitals + LINAC Centers on, Gaps off) and
+    // sync the legend to what is actually visible.
+    applyLayerVisibility();
+    updateLegend();
 }
 
 // Call initialization when the page loads
 document.addEventListener('DOMContentLoaded', initializeApp);
-
-async function hideWalmartsNearLinac() {
-    const selectedState = document.getElementById('state')?.value;
-    if (!selectedState || selectedState === 'all') {
-        return;
-    }
-
-    let gapKeys = osrmLinacGapPinKeys;
-    if (gapKeys == null) {
-        const minutes = getDriveTimeMinutes();
-        const response = await fetch(
-            `/api/metrics?state=${encodeURIComponent(selectedState)}&driveTimeMinutes=${encodeURIComponent(minutes)}`
-        );
-        const metrics = await parseJsonOrThrow(response);
-        gapKeys = setOsrmLinacGapPinsFromMetrics(metrics);
-        syncSystemicGapPinsFromMetrics(metrics);
-    }
-
-    const { hiddenCount, visibleGapCount } = applyOsrmLinacGapVisibility(gapKeys, selectedState);
-    console.log(
-        `[Map] Hide Walmarts (OSRM): ${visibleGapCount} LINAC-gap pin(s) visible, ${hiddenCount} hidden`
-    );
-    updateLocationList();
-}
-
-// Update showAllWalmarts to show all markers
-function showAllWalmarts() {
-    console.log('Starting showAllWalmarts...');
-    console.log(`Total Walmart markers to show: ${walmartMarkers.length}`);
-    
-    let processedCount = 0;
-    
-    // Show all Walmart markers — but keep ring-covered ones hidden (the purple ring is the
-    // authoritative symbol at those locations; we never want a stray blue pin inside a ring).
-    walmartMarkers.forEach(marker => {
-        if (marker._hiddenBySystemicGap) {
-            processedCount++;
-            return;
-        }
-        marker.setOpacity(1);
-        processedCount++;
-
-        if (processedCount % 100 === 0) {
-            console.log(`Processed ${processedCount}/${walmartMarkers.length} Walmart markers...`);
-        }
-    });
-
-    console.log('All Walmart markers shown.');
-    
-    // Update the location list to show all markers again
-    console.log('Updating location list...');
-    updateLocationList();
-    console.log('Process complete.');
-}
 
 // Update createMetricsTable function
 function createMetricsTable() {
@@ -1496,9 +1415,12 @@ function metricsTableLoadingRow(doneStates, totalStates) {
     return `
             <tr id="metrics-table-loading-banner">
                 <td colspan="7" class="text-center py-2 text-muted bg-light border-bottom">
-                    <div class="d-flex justify-content-center align-items-center gap-2 flex-wrap py-2">
-                        <div class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></div>
-                        <span>Loading state metrics (${doneStates} / ${totalStates})...</span>
+                    <div class="d-flex flex-column justify-content-center align-items-center gap-1 py-2">
+                        <div class="d-flex justify-content-center align-items-center gap-2 flex-wrap">
+                            <div class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></div>
+                            <span>Loading state metrics (${doneStates} / ${totalStates})...</span>
+                        </div>
+                        <small class="text-muted fst-italic">Heads up: this can take 10–15 minutes to finish — it runs intensive OSRM drive-time calculations for every state.</small>
                     </div>
                 </td>
             </tr>`;
@@ -1675,45 +1597,53 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 1000); // Wait for 1 second after page loads
 });
 
-// Update getLegendHTML function
-function getLegendHTML() {
-    const hospitalLegend = `
-            <div>
-                <img src="/images/markers/marker-icon-yellow.png" alt="Hospital">
-                General acute &amp; critical access hospitals
-            </div>`;
-    const systemicLegend = `
-            <div>
-                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style="flex-shrink:0">
-                    <circle cx="7" cy="7" r="5.5" fill="#e1bee7" stroke="#4a148c" stroke-width="2"/>
-                </svg>
-                Systemic gap (OSRM)
-            </div>`;
-    const tail = `${hospitalLegend}${systemicLegend}`;
-    if (walmartsHidden) {
-        return `
-            <div>
-                <img src="/images/markers/marker-icon-blue.png" alt="Walmart">
-                Linac gaps<sup style="left: -7px;">a</sup>
-            </div>
-            <div>
-                <img src="/images/markers/marker-icon-red.png" alt="LINAC">
-                LINAC Centers
-            </div>
-            ${tail}
-        `;
-    }
+function legendRow(color, label, count) {
+    const countLine = (count != null)
+        ? `<br><span class="legend-count text-muted">Total Count: ${count.toLocaleString()}</span>`
+        : '';
     return `
             <div>
-                <img src="/images/markers/marker-icon-blue.png" alt="Walmart">
-                Walmart Locations
-            </div>
-            <div>
-                <img src="/images/markers/marker-icon-red.png" alt="LINAC">
-                LINAC Centers
-            </div>
-            ${tail}
-        `;
+                <img src="/images/markers/marker-icon-${color}.png" alt="${label}">
+                <span>${label}${countLine}</span>
+            </div>`;
+}
+
+/**
+ * Dynamic legend: only lists layers actually visible on the map given the current toggle states.
+ * Gap entries (which are Walmarts) appear only after a state has been analyzed and the Gaps layer
+ * is on, and each is labeled to make clear it is still a Walmart location. For a specific state,
+ * each row also shows the total number of pins of that type in the state.
+ */
+function getLegendHTML() {
+    const ls = getLayerState();
+    const selectedState = document.getElementById('state')?.value;
+    const perState = !!selectedState && selectedState !== 'US' && selectedState !== 'all' && selectedState !== '';
+
+    const walmartCount = perState ? walmartMarkers.filter((m) => m.walmartData && m.walmartData.state === selectedState).length : null;
+    const linacCount = perState ? linacMarkers.filter((m) => m.linacData && m.linacData.States === selectedState).length : null;
+    const hospitalCount = perState ? hospitalMarkers.filter((m) => m.hospitalData && m.hospitalData.STATE === selectedState).length : null;
+    const viableCount = perState ? gapViableCount : null;
+    const systemicCount = perState ? gapSystemicCount : null;
+
+    const rows = [];
+
+    if (ls.walmarts) {
+        rows.push(legendRow('blue', 'Walmarts', walmartCount));
+    }
+    if (ls.gaps && gapViableCount > 0) {
+        rows.push(legendRow('red', 'Viable LINAC Gaps (Walmarts)', viableCount));
+    }
+    if (ls.gaps && gapSystemicCount > 0) {
+        rows.push(legendRow('violet', 'Systemic LINAC Gaps (Walmarts)', systemicCount));
+    }
+    if (ls.linac) {
+        rows.push(legendRow('green', 'LINAC Centers', linacCount));
+    }
+    if (ls.hospitals) {
+        rows.push(legendRow('orange', 'Hospitals (General Acute &amp; Critical Access)', hospitalCount));
+    }
+
+    return rows.join('') || '<div class="text-muted small">No Layers Selected</div>';
 }
 
 // Function to update legend
