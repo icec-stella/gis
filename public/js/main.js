@@ -3,15 +3,14 @@ let map;
 let walmartMarkers = [];
 let linacMarkers = [];
 let hospitalMarkers = [];
-/** Purple ring markers — OSRM systemic-gap Walmarts; not affected by Hide Walmarts heuristic. */
+/** Purple ring markers — OSRM systemic-gap Walmarts; not affected by Hide Walmarts. */
 let systemicGapMarkers = [];
 let stateLayer;
 let usBoundaryLayer;
 let legendControl; // Add global reference to legend control
 let walmartsHidden = false; // Track if Walmarts are being hidden
-
-/** Rough miles-per-hour for Walmart hide-toggle only (straight-line heuristic). Metrics use OSRM on the server. */
-const UI_AVG_MPH = 50;
+/** OSRM LINAC-gap pin keys from the latest /api/metrics response (lat,lng at 7 dp). */
+let osrmLinacGapPinKeys = null;
 
 /**
  * Fixed hospital backstop drive-time ceiling — must match server.js HOSPITAL_BACKSTOP_MINUTES.
@@ -113,6 +112,76 @@ function findWalmartMarkerByCoords(lat, lng) {
     return null;
 }
 
+function pinCoordKey(lat, lng) {
+    return `${Number(lat).toFixed(7)},${Number(lng).toFixed(7)}`;
+}
+
+function buildLinacGapPinKeySet(pins) {
+    const set = new Set();
+    if (!Array.isArray(pins)) {
+        return set;
+    }
+    for (const p of pins) {
+        if (Number.isFinite(p.latitude) && Number.isFinite(p.longitude)) {
+            set.add(pinCoordKey(p.latitude, p.longitude));
+        }
+    }
+    return set;
+}
+
+function setOsrmLinacGapPinsFromMetrics(metrics) {
+    osrmLinacGapPinKeys = buildLinacGapPinKeySet(metrics && metrics.linacGapWalmartPins);
+    return osrmLinacGapPinKeys;
+}
+
+function isWalmartMarkerOsrmLinacGap(marker, gapKeys) {
+    const w = marker.walmartData;
+    if (!w || !gapKeys) {
+        return false;
+    }
+    const lat = Number(w.latitude);
+    const lng = Number(w.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return false;
+    }
+    return gapKeys.has(pinCoordKey(lat, lng));
+}
+
+/** Show only OSRM LINAC-gap Walmarts in the selected scope; hide all others. */
+function applyOsrmLinacGapVisibility(gapKeys, selectedState) {
+    let hiddenCount = 0;
+    let visibleGapCount = 0;
+
+    walmartMarkers.forEach((marker) => {
+        if (marker._hiddenBySystemicGap) {
+            return;
+        }
+        const w = marker.walmartData;
+        if (!w) {
+            return;
+        }
+
+        const inScope = selectedState === 'US' || w.state === selectedState;
+        if (!inScope) {
+            marker.setOpacity(0);
+            marker.closePopup();
+            hiddenCount++;
+            return;
+        }
+
+        if (isWalmartMarkerOsrmLinacGap(marker, gapKeys)) {
+            marker.setOpacity(1);
+            visibleGapCount++;
+        } else {
+            marker.setOpacity(0);
+            marker.closePopup();
+            hiddenCount++;
+        }
+    });
+
+    return { hiddenCount, visibleGapCount };
+}
+
 function clearSystemicGapMarkers() {
     if (map) {
         systemicGapMarkers.forEach((layer) => {
@@ -126,9 +195,8 @@ function clearSystemicGapMarkers() {
     systemicGapMarkers = [];
 
     // Restore Walmart pins that were hidden specifically because a systemic-gap ring covered them.
-    // If the Hide Walmarts toggle is currently on, re-evaluate restored markers against its
-    // straight-line proximity rule — some may need to stay hidden by that separate logic.
-    const maxStraightLineMiles = walmartsHidden ? (getDriveTimeMinutes() / 60) * UI_AVG_MPH : 0;
+    // If Hide Walmarts is on, re-apply OSRM gap visibility for the current state.
+    const selectedState = document.getElementById('state')?.value;
     walmartMarkers.forEach((marker) => {
         if (!marker._hiddenBySystemicGap) return;
         marker._hiddenBySystemicGap = false;
@@ -136,25 +204,30 @@ function clearSystemicGapMarkers() {
             marker.setOpacity(1);
             return;
         }
-        const isNearLinac = linacMarkers.some((linacMarker) => {
-            const distanceMi = marker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
-            return distanceMi <= maxStraightLineMiles;
-        });
-        marker.setOpacity(isNearLinac ? 0 : 1);
     });
+    if (walmartsHidden && osrmLinacGapPinKeys && selectedState && selectedState !== 'all') {
+        applyOsrmLinacGapVisibility(osrmLinacGapPinKeys, selectedState);
+    }
 }
 
 /**
  * Purple rings — Walmart locations that are OSRM systemic gaps (no LINAC + no general acute or
  * critical access hospital ≤ cutoff). The ring is the authoritative symbol at these locations;
- * the underlying blue Walmart pin is hidden to give every location exactly one visual marker
- * (the Hide-Walmarts straight-line heuristic disagrees with OSRM at some locations, which
- * previously left a stray blue pin inside some rings).
+ * the underlying blue Walmart pin is hidden to give every location exactly one visual marker.
  */
 function syncSystemicGapPinsFromMetrics(metrics) {
+    setOsrmLinacGapPinsFromMetrics(metrics);
     clearSystemicGapMarkers();
     const st = document.getElementById('state')?.value;
-    if (!map || !st || st === 'US' || st === 'all') {
+    if (!map || !st || st === 'all') {
+        updateLegend();
+        return;
+    }
+    if (st === 'US') {
+        if (walmartsHidden && osrmLinacGapPinKeys) {
+            applyOsrmLinacGapVisibility(osrmLinacGapPinKeys, 'US');
+            updateLocationList();
+        }
         updateLegend();
         return;
     }
@@ -218,8 +291,12 @@ function syncSystemicGapPinsFromMetrics(metrics) {
     });
     if (pins.length > 0) {
         console.log(
-            `[Map] ${pins.length} systemic-gap location(s) — purple rings (OSRM classification; unaffected by Hide Walmarts heuristic)`
+            `[Map] ${pins.length} systemic-gap location(s) — purple rings (OSRM classification)`
         );
+    }
+    if (walmartsHidden && osrmLinacGapPinKeys && st && st !== 'all') {
+        applyOsrmLinacGapVisibility(osrmLinacGapPinKeys, st);
+        updateLocationList();
     }
     updateLegend();
 }
@@ -711,7 +788,7 @@ function initializeEventListeners() {
     console.log('Toggle button found:', toggleWalmartsBtn); // Check if button exists
     console.log('Toggle button text:', toggleWalmartsBtn?.textContent); // Check initial text
 
-    toggleWalmartsBtn.addEventListener('click', () => {
+    toggleWalmartsBtn.addEventListener('click', async () => {
         console.log('Toggle button clicked!'); // Log when clicked
         const isHiding = toggleWalmartsBtn.textContent === 'Hide Walmarts';
         console.log('isHiding:', isHiding); // Log the state
@@ -722,7 +799,7 @@ function initializeEventListeners() {
         if (selectedState === 'US' || (selectedState && selectedState !== 'all')) {
             console.log('Condition met, proceeding with toggle'); // Log if condition is met
             if (isHiding) {
-                hideWalmartsNearLinac();
+                await hideWalmartsNearLinac();
                 toggleWalmartsBtn.textContent = 'Show All Walmarts';
                 walmartsHidden = true; // Set state to hidden
             } else {
@@ -983,6 +1060,7 @@ async function updateAnalysis() {
         // Reset Walmarts visibility state when a new state is selected
         // This ensures the button text and legend match the actual map state
         walmartsHidden = false;
+        osrmLinacGapPinKeys = null;
         const toggleWalmartsBtn = document.getElementById('toggle-walmarts');
         toggleWalmartsBtn.textContent = 'Hide Walmarts';
         updateLegend(); // Update legend to show "Walmart Locations"
@@ -1201,43 +1279,28 @@ async function initializeApp() {
 // Call initialization when the page loads
 document.addEventListener('DOMContentLoaded', initializeApp);
 
-// Update hideWalmartsNearLinac to use point-in-polygon check
-function hideWalmartsNearLinac() {
-    console.log('Starting hideWalmartsNearLinac...');
-    // Get the current radius value from the input
-    const maxStraightLineMiles = (getDriveTimeMinutes() / 60) * UI_AVG_MPH;
-    console.log(`Max approx. miles (straight line for toggle): ${maxStraightLineMiles}`);
-    console.log(`Total Walmart markers to process: ${walmartMarkers.length}`);
-    console.log(`Total LINAC markers to check against: ${linacMarkers.length}`);
-    
-    let hiddenCount = 0;
-    let processedCount = 0;
-    
-    walmartMarkers.forEach(walmartMarker => {
-        // Check if this Walmart is within the specified radius of any LINAC
-        const isNearLinac = linacMarkers.some(linacMarker => {
-            const distanceMi = walmartMarker.getLatLng().distanceTo(linacMarker.getLatLng()) / 1609.34;
-            return distanceMi <= maxStraightLineMiles;
-        });
+async function hideWalmartsNearLinac() {
+    const selectedState = document.getElementById('state')?.value;
+    if (!selectedState || selectedState === 'all') {
+        return;
+    }
 
-        if (isNearLinac) {
-            walmartMarker.setOpacity(0);  // Hide the marker
-            walmartMarker.closePopup();    // Close any open popup
-            hiddenCount++;
-        }
-        
-        processedCount++;
-        if (processedCount % 100 === 0) {
-            console.log(`Processed ${processedCount}/${walmartMarkers.length} Walmart markers...`);
-        }
-    });
+    let gapKeys = osrmLinacGapPinKeys;
+    if (gapKeys == null) {
+        const minutes = getDriveTimeMinutes();
+        const response = await fetch(
+            `/api/metrics?state=${encodeURIComponent(selectedState)}&driveTimeMinutes=${encodeURIComponent(minutes)}`
+        );
+        const metrics = await parseJsonOrThrow(response);
+        gapKeys = setOsrmLinacGapPinsFromMetrics(metrics);
+        syncSystemicGapPinsFromMetrics(metrics);
+    }
 
-    console.log(`Hiding complete. Hidden ${hiddenCount} Walmart markers.`);
-    
-    // Update the location list to reflect hidden markers
-    console.log('Updating location list...');
+    const { hiddenCount, visibleGapCount } = applyOsrmLinacGapVisibility(gapKeys, selectedState);
+    console.log(
+        `[Map] Hide Walmarts (OSRM): ${visibleGapCount} LINAC-gap pin(s) visible, ${hiddenCount} hidden`
+    );
     updateLocationList();
-    console.log('Process complete.');
 }
 
 // Update showAllWalmarts to show all markers
@@ -1309,15 +1372,11 @@ function createMetricsTable() {
                                 <th class="text-end">Total<br>Walmarts</th>
                                 <th class="text-end">LINAC<br>Centers</th>
                                 <th class="text-end">Total<br>LINACs</th>
-                                <th class="text-end">
-                                    <div>Total<br>Hospitals</div>
-                                    <div class="small text-muted fw-normal mt-1 lh-sm">OPEN general acute &amp; critical access (excludes CLOSED; AS, GU, MP, PW, VI excluded).</div>
-                                </th>
                             </tr>
                         </thead>
                         <tbody id="metrics-table-body">
                             <tr>
-                                <td colspan="8" class="text-center">
+                                <td colspan="7" class="text-center">
                                     <div class="spinner-border text-primary" role="status">
                                         <span class="visually-hidden">Loading...</span>
                                     </div>
@@ -1348,7 +1407,7 @@ function createMetricsTable() {
 function downloadMetricsCSV() {
     const minutes = getDriveTimeMinutes();
     const table = document.querySelector('.metrics-table');
-    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM),Viable Gap (General acute or critical access hospital ${HOSPITAL_BACKSTOP_MINUTES} min),Systemic Gap (no hospital within ${HOSPITAL_BACKSTOP_MINUTES} min),Total Walmarts,LINAC Centers,Total LINACs,Total Hospitals\n`;
+    let csvContent = `State,No LINAC Within ${minutes} Min (OSRM),Viable Gap (General acute or critical access hospital ${HOSPITAL_BACKSTOP_MINUTES} min),Systemic Gap (no hospital within ${HOSPITAL_BACKSTOP_MINUTES} min),Total Walmarts,LINAC Centers,Total LINACs\n`;
 
     // Get all table rows
     const rows = table.querySelectorAll('tbody tr');
@@ -1356,7 +1415,7 @@ function downloadMetricsCSV() {
     // Convert each row to CSV
     rows.forEach((row) => {
         const cells = row.querySelectorAll('td');
-        if (cells.length < 8 || row.id === 'metrics-table-loading-banner') {
+        if (cells.length < 7 || row.id === 'metrics-table-loading-banner') {
             return;
         }
         const rowData = Array.from(cells)
@@ -1394,7 +1453,7 @@ function downloadMetricsJSON() {
     // Convert each row to a JSON object
     rows.forEach(row => {
         const cells = row.querySelectorAll('td');
-        if (cells.length < 8 || row.id === 'metrics-table-loading-banner') {
+        if (cells.length < 7 || row.id === 'metrics-table-loading-banner') {
             return;
         }
         const state = cells[0].textContent.trim();
@@ -1404,7 +1463,6 @@ function downloadMetricsJSON() {
         const totalWalmarts = parseInt(cells[4].textContent.replace(/,/g, '')) || 0;
         const linacCenters = parseInt(cells[5].textContent.replace(/,/g, '')) || 0;
         const totalLinacs = parseInt(cells[6].textContent.replace(/,/g, '')) || 0;
-        const totalHospitals = parseInt(cells[7].textContent.replace(/,/g, '')) || 0;
 
         jsonData.push({
             state,
@@ -1414,7 +1472,6 @@ function downloadMetricsJSON() {
             totalWalmarts,
             linacCenters,
             totalLinacs,
-            totalHospitals,
             driveTimeMinutes: parseInt(minutes, 10),
             hospitalBackstopMinutes: HOSPITAL_BACKSTOP_MINUTES
         });
@@ -1438,7 +1495,7 @@ function downloadMetricsJSON() {
 function metricsTableLoadingRow(doneStates, totalStates) {
     return `
             <tr id="metrics-table-loading-banner">
-                <td colspan="8" class="text-center py-2 text-muted bg-light border-bottom">
+                <td colspan="7" class="text-center py-2 text-muted bg-light border-bottom">
                     <div class="d-flex justify-content-center align-items-center gap-2 flex-wrap py-2">
                         <div class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></div>
                         <span>Loading state metrics (${doneStates} / ${totalStates})...</span>
@@ -1470,13 +1527,10 @@ function sumMetricsTotals(metricsList) {
     );
 }
 
-function renderMetricsRow(st, metrics, isStrong, hospitalCountOverride) {
+function renderMetricsRow(st, metrics, isStrong) {
     const m = metrics;
     const a = isStrong ? '<strong>' : '';
     const z = isStrong ? '</strong>' : '';
-    const hospitalCount = Number.isFinite(hospitalCountOverride)
-        ? hospitalCountOverride
-        : (m.totalHospitals || 0);
     return `
         <tr${isStrong ? ' class="us-total-row"' : ''}>
             <td>${a}${st}${z}</td>
@@ -1486,7 +1540,6 @@ function renderMetricsRow(st, metrics, isStrong, hospitalCountOverride) {
             <td class="text-end">${a}${(m.totalWalmarts || 0).toLocaleString()}${z}</td>
             <td class="text-end">${a}${(m.cityCentersWithinRange || 0).toLocaleString()}${z}</td>
             <td class="text-end">${a}${(m.linacsWithinRange || 0).toLocaleString()}${z}</td>
-            <td class="text-end">${a}${hospitalCount.toLocaleString()}${z}</td>
         </tr>
     `;
 }
@@ -1539,7 +1592,7 @@ async function populateTableData() {
             );
             doneStates += batch.length;
             for (const { state: st, metrics: m } of batch) {
-                tableRows += renderMetricsRow(st.text, m, false, inventoryByState[st.value] || 0);
+                tableRows += renderMetricsRow(st.text, m, false);
                 metricsForTotals.push(m);
             }
 
@@ -1551,7 +1604,7 @@ async function populateTableData() {
         const usTotals = sumMetricsTotals(metricsForTotals);
 
         tableBody.innerHTML =
-            renderMetricsRow('United States (sum)', usTotals, true, inventory.total || 0) + tableRows;
+            renderMetricsRow('United States (sum)', usTotals, true) + tableRows;
 
         const sample = metricsForTotals[0];
         if (sample && !('viableGapWalmarts' in sample)) {
@@ -1565,7 +1618,7 @@ async function populateTableData() {
         console.error('Error loading table metrics:', error);
         tableBody.innerHTML = `
             <tr>
-                <td colspan="8" class="text-center text-danger">
+                <td colspan="7" class="text-center text-danger">
                     Error loading metrics: ${error.message}
                 </td>
             </tr>

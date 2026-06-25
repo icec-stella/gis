@@ -433,6 +433,10 @@ async function computeMetricsForStateAbbrev(
         }
     }
 
+    const linacGapWalmartPins = linacGapWalmartsValidCoords
+        .map((w) => walmartGeoPinForApi(w))
+        .filter((pin) => pin != null);
+
     let viableGapWalmarts = 0;
     let systemicGapWalmarts = 0;
     const systemicGapWalmartPins = [];
@@ -495,6 +499,7 @@ async function computeMetricsForStateAbbrev(
         walmartsOutsideRange: walmartsOutsideCount,
         viableGapWalmarts,
         systemicGapWalmarts,
+        linacGapWalmartPins,
         systemicGapWalmartPins,
         totalWalmarts: stateWalmarts.length,
         cityCentersWithinRange: totalCenters,
@@ -548,6 +553,7 @@ app.get('/api/metrics', async (req, res) => {
             walmartsOutsideRange: 0,
             viableGapWalmarts: 0,
             systemicGapWalmarts: 0,
+            linacGapWalmartPins: [],
             systemicGapWalmartPins: [],
             totalWalmarts: 0,
             cityCentersWithinRange: 0,
@@ -579,6 +585,9 @@ app.get('/api/metrics', async (req, res) => {
                     totals.walmartsOutsideRange += m.walmartsOutsideRange;
                     totals.viableGapWalmarts += m.viableGapWalmarts || 0;
                     totals.systemicGapWalmarts += m.systemicGapWalmarts || 0;
+                    if (Array.isArray(m.linacGapWalmartPins)) {
+                        totals.linacGapWalmartPins.push(...m.linacGapWalmartPins);
+                    }
                     totals.totalWalmarts += m.totalWalmarts;
                     totals.cityCentersWithinRange += m.cityCentersWithinRange;
                     totals.linacsWithinRange += m.linacsWithinRange;
