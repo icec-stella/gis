@@ -99,13 +99,12 @@ Integration tests check `/api/metrics` for ten representative states against the
 
 ## Deployment
 
-The app runs on any Node.js host. To deploy it on [Render](https://render.com/), create a **Web Service** from this repository's `main` branch with:
+The app runs on any Node.js host:
 
 -   **Build Command**: `npm install`
 -   **Start Command**: `npm start`
--   **Environment**: set `ALLOWED_IFRAME_DOMAINS` (see [Security](#security)). `PORT` is provided by Render automatically.
-
-Render uses the Node version set by `engines` in `package.json` (22.x). For auto-deploy on push, Render's GitHub App needs access to the repository.
+-   **Node version**: 22.x (set by `engines` in `package.json`)
+-   **Environment**: set `ALLOWED_IFRAME_DOMAINS` (see [Security](#security)). `PORT` is read from the environment and defaults to 5025.
 
 ## Security
 
@@ -113,7 +112,7 @@ This application includes several security features to protect against abuse and
 
 - **Content Security Policy (CSP)**: Restricts resource loading to trusted sources, preventing XSS attacks and unauthorized resource access
 - **Rate Limiting**: Limits requests to 100 per minute per IP address to prevent abuse and DDoS attacks
-- **Iframe Domain Restrictions**: Controlled by the `ALLOWED_IFRAME_DOMAINS` environment variable. If it is not set, the app can be embedded on **any** site, so set it in production (e.g. `https://icecancer.org https://*.icecancer.org`)
+- **Iframe Domain Restrictions**: Controlled by the `ALLOWED_IFRAME_DOMAINS` environment variable. If it is not set, the app can be embedded on **any** site, so set it in production (e.g. `https://iceccancer.org https://*.iceccancer.org`)
 - **Security Headers**: Includes `X-Content-Type-Options` and `X-Frame-Options` headers for additional browser-level protection
 
 ### Environment Variables

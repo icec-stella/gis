@@ -36,7 +36,7 @@ app.use(limiter);
 // Enhanced security headers with Content Security Policy
 app.use((req, res, next) => {
   // Get allowed iframe domains from environment variable, default to allowing all for testing
-  // Set ALLOWED_IFRAME_DOMAINS in Render dashboard to restrict embedding (e.g., "https://icecancer.org https://*.icecancer.org")
+  // Set ALLOWED_IFRAME_DOMAINS in the host environment to restrict embedding (e.g., "https://iceccancer.org https://*.iceccancer.org")
   const allowedIframeDomains = process.env.ALLOWED_IFRAME_DOMAINS || '*';
   
   // Build Content Security Policy
