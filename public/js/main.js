@@ -98,19 +98,32 @@ const Z_INDEX_WALMART = 2000;
 const Z_INDEX_LINAC = 1000;
 const Z_INDEX_HOSPITAL = 0;
 
-const greenMarkerIcon = L.icon({
-    iconUrl: '/images/markers/marker-icon-green.png',
-    iconSize: [12, 20],
-    iconAnchor: [6, 20],
-    popupAnchor: [1, -17]
-});
+/** Darker pin fills for contrast on the basemap (legend uses the same colors). */
+const PIN_LINAC_HEX = '#1A7A42';
+const PIN_HOSPITAL_HEX = '#C45200';
 
-const orangeMarkerIcon = L.icon({
-    iconUrl: '/images/markers/marker-icon-orange.png',
-    iconSize: [12, 20],
-    iconAnchor: [6, 20],
-    popupAnchor: [1, -17]
-});
+const MARKER_PIN_PATH =
+    'M12.5 0C5.596 0 0 5.596 0 12.5c0 1.79.464 3.472 1.276 4.926L12.5 41l11.224-23.574A12.45 12.45 0 0 0 25 12.5C25 5.596 19.404 0 12.5 0z';
+
+function pinIconDataUrl(fillHex) {
+    const svg =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="20" viewBox="0 0 25 41">` +
+        `<path fill="${fillHex}" stroke="#2B2B2B" stroke-width="1" d="${MARKER_PIN_PATH}"/>` +
+        `<circle cx="12.5" cy="12.5" r="4.75" fill="#FFFFFF"/></svg>`;
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function makePinIcon(fillHex) {
+    return L.icon({
+        iconUrl: pinIconDataUrl(fillHex),
+        iconSize: [12, 20],
+        iconAnchor: [6, 20],
+        popupAnchor: [1, -17]
+    });
+}
+
+const greenMarkerIcon = makePinIcon(PIN_LINAC_HEX);
+const orangeMarkerIcon = makePinIcon(PIN_HOSPITAL_HEX);
 
 const violetMarkerIcon = L.icon({
     iconUrl: '/images/markers/marker-icon-violet.png',
@@ -1597,13 +1610,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 1000); // Wait for 1 second after page loads
 });
 
+function legendSwatchHtml(color, label) {
+    if (color === 'green') {
+        return `<img src="${pinIconDataUrl(PIN_LINAC_HEX)}" alt="${label}">`;
+    }
+    if (color === 'orange') {
+        return `<img src="${pinIconDataUrl(PIN_HOSPITAL_HEX)}" alt="${label}">`;
+    }
+    return `<img src="/images/markers/marker-icon-${color}.png" alt="${label}">`;
+}
+
 function legendRow(color, label, count) {
     const countLine = (count != null)
         ? `<br><span class="legend-count text-muted">Total Count: ${count.toLocaleString()}</span>`
         : '';
     return `
             <div>
-                <img src="/images/markers/marker-icon-${color}.png" alt="${label}">
+                ${legendSwatchHtml(color, label)}
                 <span>${label}${countLine}</span>
             </div>`;
 }
