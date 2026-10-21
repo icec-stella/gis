@@ -7,6 +7,9 @@
     "dev": "nodemon server.js",
     "test": "node --test test/metrics-states.test.js"
   },
+  "engines": {
+    "node": "22.x"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
