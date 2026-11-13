@@ -29,7 +29,7 @@ const path = require('path');
 
 const {
     getDriveTimes,
-    loadDataFromFile,
+    loadDataset,
     linacRowsForDriveTimeOsrm,
     walmartRowHasValidCoords,
     hospitalRowsForDriveTimeOsrm,
@@ -233,9 +233,9 @@ async function run() {
     const stateArgRaw = String(getArg('--state', 'TX')).toUpperCase();
     const nationwide = stateArgRaw === 'US' || stateArgRaw === 'ALL';
 
-    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
-    const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
-    const hospitals = loadDataFromFile('./src/data/hospital-locations.json');
+    const walmartLocations = loadDataset('walmart-locations.json');
+    const linacLocations = loadDataset('linac-locations.json');
+    const hospitals = loadDataset('hospital-locations.json');
 
     const codes = nationwide
         ? [...new Set(walmartLocations.map((w) => w.state).filter(Boolean))].sort()

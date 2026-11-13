@@ -23,11 +23,11 @@ Three static datasets drive the analysis. All are loaded fresh from disk on each
 
 | Dataset | File | Records | Source / notes |
 |---|---|---|---|
-| Walmart store locations | `src/data/walmart-locations.json` | 4,654 | Includes the contiguous 48, AK, HI, DC, and PR. Fields: name, address, city, state (two-letter), latitude, longitude. |
+| Walmart store locations | `src/data/walmart-locations.json` | 4,654 (4,636 in scope) | Includes the contiguous 48, AK, HI, DC, and PR (PR excluded from analysis; see below). Fields: name, address, city, state (two-letter), latitude, longitude. |
 | LINAC facility locations | `src/data/linac-locations.json` | 2,124 records / ~2,250 machines | Compiled from publicly available radiation oncology facility lists. Fields: facility name, city, state (two-letter), coordinates, and the number of LINAC machines at the site. |
 | Hospital locations | `src/data/hospital-locations.json` | 7,596 raw rows | HIFLD-style (Homeland Infrastructure Foundation-Level Data) U.S. hospital inventory. Fields used: NAME, STATE, STATUS, TYPE, LATITUDE, LONGITUDE. |
 
-State coverage is the 50 states plus the District of Columbia (DC) and Puerto Rico (PR). The hospital file contains one row coded as Palau (PW); that row is flagged at startup and excluded from per-state and US results.
+State coverage is the 50 states plus the District of Columbia (DC). Puerto Rico (PR) rows remain in all three data files but are excluded from the analysis, map, and metrics by `EXCLUDED_ANALYSIS_REGIONS` in `server.js` (in scope: 4,636 Walmarts, 2,212 LINAC centers / 3,850 LINACs, 5,120 eligible hospitals). The hospital file contains one row coded as Palau (PW); that row is flagged at startup and excluded from per-state and US results.
 
 ---
 
@@ -53,7 +53,7 @@ A hospital row is eligible to serve as a routing destination if **all three** of
 2. **`STATUS = 'OPEN'`** — closed hospitals are excluded. In the source data, 319 of 7,596 rows are coded `CLOSED`.
 3. **`TYPE ∈ {GENERAL ACUTE CARE, CRITICAL ACCESS}`** — the two HIFLD facility-care categories that represent inpatient acute care. The eight excluded categories are `PSYCHIATRIC`, `LONG TERM CARE`, `REHABILITATION`, `MILITARY`, `SPECIAL`, `CHILDREN`, `WOMEN`, and `CHRONIC DISEASE`.
 
-Two further exclusions apply: territory codes with no Walmart footprint (AS, GU, MP, PW, VI), and the 94 HIFLD rows listed by ID in `src/data/hospital-linac-exclusions.json` — facilities that operate LINACs and are already in the LINAC inventory (the 91 verified centers absent from DIRAC), removed so no facility counts as both an RT center and a backstop hospital. After applying all filters, **5,180 hospitals** are eligible: 4,175 general acute care + 1,005 critical access. No bed-count threshold is applied — the clinical `TYPE` filter alone determines inpatient-backstop eligibility, and facilities with unreported bed counts (HIFLD's `-999` sentinel) are included on the same basis as any other open acute-care or critical-access hospital.
+Two further exclusions apply: territory codes with no Walmart footprint (AS, GU, MP, PW, VI), and the 94 HIFLD rows listed by ID in `src/data/hospital-linac-exclusions.json` — facilities that operate LINACs and are already in the LINAC inventory (the 91 verified centers absent from DIRAC), removed so no facility counts as both an RT center and a backstop hospital. After applying all filters, **5,120 hospitals** are eligible in scope: 4,115 general acute care + 1,005 critical access (5,180 including Puerto Rico). No bed-count threshold is applied — the clinical `TYPE` filter alone determines inpatient-backstop eligibility, and facilities with unreported bed counts (HIFLD's `-999` sentinel) are included on the same basis as any other open acute-care or critical-access hospital.
 
 #### Why the `TYPE` filter rather than NAICS
 
@@ -94,7 +94,7 @@ The analysis uses **two distinct drive-time ceilings**, evaluated independently:
 
 The two thresholds answer two different clinical questions, and stretching one does not stretch the other. A user widening the LINAC slider to 180 minutes is asking "how far does a patient *have* to travel for radiation therapy?" — a planning question about specialized care. Asking the same patient to drive three hours for emergency or inpatient care would not be a meaningful backstop, so the hospital threshold remains anchored at 30 minutes regardless of the slider position. The hospital-side analysis is therefore exactly the same whether the LINAC slider is set to 30 minutes or 180 minutes.
 
-### 5.2 Cross-border destination rule (Alaska / Hawaii / Puerto Rico isolation)
+### 5.2 Cross-border destination rule (Alaska / Hawaii isolation)
 
 Drive-time routing over a connected road network is meaningless for facility pairs that are not on the same road network. The contiguous 48 states and DC share one connected network; Alaska's road network is largely disjoint from the contiguous 48; and Hawaii and Puerto Rico are island networks unreachable by road from the mainland.
 
@@ -104,8 +104,7 @@ We therefore apply the following rule for both LINAC and hospital destination se
 |---|---|
 | Alaska | LINACs / hospitals **in Alaska only** |
 | Hawaii | LINACs / hospitals **in Hawaii only** |
-| Puerto Rico | LINACs / hospitals **in Puerto Rico only** |
-| Any other state | All LINACs / hospitals **except** those in Alaska, Hawaii, or Puerto Rico |
+| Any other state | All LINACs / hospitals **except** those in Alaska or Hawaii |
 
 Continental markets are explicitly allowed to route across state lines — a Walmart in southern Vermont may be closest to a Massachusetts LINAC, and that counts. Only the three isolated-network states / territories above are special-cased.
 
@@ -190,7 +189,7 @@ The aggregation is **not** a single nationwide OSRM matrix. Each state's Walmart
 
 - A Walmart in Texas may route to LINACs and hospitals in Oklahoma, New Mexico, Louisiana, etc.
 - A Walmart in Alaska may route only to in-Alaska destinations.
-- Hawaii and Puerto Rico Walmarts likewise route only to in-territory destinations.
+- Hawaii Walmarts likewise route only to in-state destinations. (Puerto Rico is out of scope.)
 
 The per-state results are then summed exactly as you would expect: total LINAC-gap is the sum over states of LINAC-gap, viable gap is the sum of viable gaps, etc. Inventory columns (LINAC Centers, Total LINACs, Total Walmarts) are also straight sums.
 

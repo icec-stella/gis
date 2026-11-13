@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 
 const {
-    loadDataFromFile,
+    loadDataset,
     linacRowHasValidCoords,
     hospitalRowEligibleRoute,
     geoLatLonFromRow
@@ -94,8 +94,8 @@ function findHospitalMatches(linac, hospitals) {
 }
 
 function main() {
-    const linacs = loadDataFromFile('./src/data/linac-locations.json');
-    const hospitals = loadDataFromFile('./src/data/hospital-locations.json');
+    const linacs = loadDataset('linac-locations.json');
+    const hospitals = loadDataset('hospital-locations.json');
 
     const linacsWithCoords = linacs.filter(linacRowHasValidCoords);
     const hospitalsWithCoords = hospitals.filter(hospitalRowHasValidCoords);

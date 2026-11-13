@@ -16,7 +16,7 @@ const https = require('https');
 
 const {
     getDriveTimes,
-    loadDataFromFile,
+    loadDataset,
     geoLatLonFromRow
 } = require('../server.js');
 
@@ -277,7 +277,7 @@ async function main() {
         console.log(`CATCHMENT_STORE_LIMIT=${STORE_LIMIT} (smoke test)`);
     }
 
-    const walmarts = loadDataFromFile('./src/data/walmart-locations.json');
+    const walmarts = loadDataset('walmart-locations.json');
     const { byState, vintage: tractVintage } = await loadTracts();
 
     const storeResults = [];

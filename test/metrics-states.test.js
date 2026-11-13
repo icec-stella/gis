@@ -29,8 +29,8 @@ function loadJson(name) {
     return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
-/** Variety: isolated (AK, HI, PR), large/medium continental, sparse. */
-const TEN_STATES = ['AK', 'TX', 'CA', 'NH', 'ND', 'DE', 'FL', 'HI', 'PR', 'WY'];
+/** Variety: isolated (AK, HI), large/medium continental, sparse. */
+const TEN_STATES = ['AK', 'TX', 'CA', 'NH', 'ND', 'DE', 'FL', 'HI', 'MS', 'WY'];
 
 function expectedTotalsFromFixture(stateAbbr, walmartLocations, linacLocations, hospitalLocations) {
     const stores = walmartLocations.filter((w) => w.state === stateAbbr);
@@ -68,7 +68,7 @@ describe(
 
             assert.ok(continentalAnchors > 100, 'continental pool should include many LINAC rows');
 
-            for (const iso of ['AK', 'HI', 'PR']) {
+            for (const iso of ['AK', 'HI']) {
                 const nIso = linacLocations.filter((l) => linacRowHasValidCoords(l) && l.States === iso).length;
                 assert.equal(
                     linacRowsForDriveTimeOsrm(iso, linacLocations).length,

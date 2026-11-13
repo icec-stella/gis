@@ -1291,7 +1291,7 @@ function createMetricsTable() {
                                 <th>State</th>
                                 <th class="text-end">
                                     <div>No LINAC within ${minutes} min (OSRM)</div>
-                                    <div class="small text-muted fw-normal mt-1 lh-sm">Incl. bordering states. Cross-border excludes AK, HI &amp; PR LINACs; those rows use in-state LINACs only.</div>
+                                    <div class="small text-muted fw-normal mt-1 lh-sm">Incl. bordering states. Cross-border excludes AK &amp; HI LINACs; those rows use in-state LINACs only. Puerto Rico is outside the study scope.</div>
                                 </th>
                                 <th class="text-end">
                                     <div>Viable gap</div>
@@ -1507,7 +1507,7 @@ async function populateTableData() {
                 `/api/metrics?state=${encodeURIComponent(stateCode)}&driveTimeMinutes=${encodeURIComponent(minutes)}`
             );
 
-        console.log(`[Table] OSRM reachability per state (${minutes} min; cross-border contiguous, AK/HI/PR isolated). US row = sum.`);
+        console.log(`[Table] OSRM reachability per state (${minutes} min; cross-border contiguous, AK/HI isolated, PR excluded). US row = sum.`);
 
         let tableRows = '';
         /** @type {{ walmartsOutsideRange: number, viableGapWalmarts?: number, systemicGapWalmarts?: number, totalWalmarts: number, cityCentersWithinRange: number, linacsWithinRange: number, totalHospitals?: number }[]} */

@@ -23,7 +23,7 @@ const path = require('path');
 
 const {
     getDriveTimes,
-    loadDataFromFile,
+    loadDataset,
     linacRowsForDriveTimeOsrm,
     walmartRowHasValidCoords,
     hospitalRowsForDriveTimeOsrm,
@@ -83,9 +83,9 @@ async function run() {
     const linacMinutes = getLinacMinutesArg();
     const linacThresholdSeconds = linacMinutes * 60;
 
-    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
-    const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
-    const hospitals = loadDataFromFile('./src/data/hospital-locations.json');
+    const walmartLocations = loadDataset('walmart-locations.json');
+    const linacLocations = loadDataset('linac-locations.json');
+    const hospitals = loadDataset('hospital-locations.json');
 
     const stateWalmarts = walmartLocations.filter((w) => w.state === STATE);
     const withCoords = stateWalmarts.filter(walmartRowHasValidCoords);

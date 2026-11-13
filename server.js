@@ -99,6 +99,41 @@ function loadDataFromFile(relPath, opts) {
     }
 }
 
+/**
+ * Regions dropped from the whole analysis (map, metrics, offline scripts). Their rows stay in the
+ * data files; they are filtered out here so every consumer sees the same scope. Puerto Rico was
+ * removed from the study scope (50 states + DC).
+ */
+const EXCLUDED_ANALYSIS_REGIONS = new Set(['PR']);
+
+/** State-code field for each dataset loaded through loadDataset(). */
+const DATASET_STATE_FIELD = {
+    'walmart-locations.json': 'state',
+    'linac-locations.json': 'States',
+    'hospital-locations.json': 'STATE'
+};
+
+function inAnalysisScope(stateCode) {
+    return !EXCLUDED_ANALYSIS_REGIONS.has(String(stateCode ?? '').trim().toUpperCase());
+}
+
+const _datasetScopeCache = new WeakMap(); // parsed array -> filtered array
+
+/** Load a src/data dataset with EXCLUDED_ANALYSIS_REGIONS removed. Use this, not loadDataFromFile, for analysis data. */
+function loadDataset(fileName) {
+    const rows = loadDataFromFile(`./src/data/${fileName}`, {
+        optional: fileName === 'hospital-locations.json'
+    });
+    const field = DATASET_STATE_FIELD[fileName];
+    if (!Array.isArray(rows) || !field) return rows;
+    let scoped = _datasetScopeCache.get(rows);
+    if (!scoped) {
+        scoped = rows.filter((r) => inAnalysisScope(r[field]));
+        _datasetScopeCache.set(rows, scoped);
+    }
+    return scoped;
+}
+
 function parseGeoNumber(v) {
     if (v == null) return NaN;
     if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
@@ -184,7 +219,10 @@ function hospitalEligibleType(h) {
 }
 
 function hospitalTerritoryExcluded(h) {
-    return EXCLUDED_HOSPITAL_TERRITORY_STATES.has(String(h.STATE ?? '').trim().toUpperCase());
+    return (
+        EXCLUDED_HOSPITAL_TERRITORY_STATES.has(String(h.STATE ?? '').trim().toUpperCase()) ||
+        !inAnalysisScope(h.STATE)
+    );
 }
 
 /**
@@ -321,10 +359,10 @@ app.get('/api/cities', (req, res) => {
 });
 
 app.get('/api/map-data', (req, res) => {
-    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
+    const walmartLocations = loadDataset('walmart-locations.json');
     const cityCenters = loadDataFromFile('./src/data/city-centers.json', { optional: true });
-    const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
-    const hospitalLocations = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+    const linacLocations = loadDataset('linac-locations.json');
+    const hospitalLocations = loadDataset('hospital-locations.json');
     const hospitalsForClient = Array.isArray(hospitalLocations)
         ? hospitalLocations.filter(hospitalRowEligibleRoute)
         : [];
@@ -527,9 +565,9 @@ async function computeMetricsForStateAbbrev(
 }
 
 app.get('/api/metrics', async (req, res) => {
-    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
-    const linacLocations = loadDataFromFile('./src/data/linac-locations.json');
-    const hospitalLocations = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+    const walmartLocations = loadDataset('walmart-locations.json');
+    const linacLocations = loadDataset('linac-locations.json');
+    const hospitalLocations = loadDataset('hospital-locations.json');
 
     console.log(
         `[Server] Metrics API - Loading data: ${walmartLocations.length} Walmarts, ${linacLocations.length} LINACs, hospitals file ${Array.isArray(hospitalLocations) ? hospitalLocations.length : 0} rows`
@@ -647,8 +685,8 @@ app.get('/api/metrics', async (req, res) => {
 });
 
 app.get('/api/states', (req, res) => {
-    const walmartLocations = loadDataFromFile('./src/data/walmart-locations.json');
-    const hospitalLocations = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+    const walmartLocations = loadDataset('walmart-locations.json');
+    const hospitalLocations = loadDataset('hospital-locations.json');
 
     // Walmart-driven analysis states, plus any hospital-only territories in the fixture.
     const statesFromData = [
@@ -663,7 +701,7 @@ app.get('/api/states', (req, res) => {
 
 /** Eligible hospital inventory: OPEN + general acute / critical access (+ valid coords), grouped by STATE. */
 app.get('/api/hospital-inventory', (req, res) => {
-    const hospitals = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+    const hospitals = loadDataset('hospital-locations.json');
     if (!Array.isArray(hospitals)) {
         return res.json({ total: 0, byState: {} });
     }
@@ -938,6 +976,9 @@ module.exports = {
     app,
     getDriveTimes,
     loadDataFromFile,
+    loadDataset,
+    inAnalysisScope,
+    EXCLUDED_ANALYSIS_REGIONS,
     linacRowsForDriveTimeOsrm,
     linacRowHasValidCoords,
     walmartRowHasValidCoords,
@@ -962,9 +1003,9 @@ const RECOGNIZED_STATE_CODES = new Set([
 ]);
 
 function warnOnUnknownStateCodes() {
-    const walmarts = loadDataFromFile('./src/data/walmart-locations.json');
-    const linacs = loadDataFromFile('./src/data/linac-locations.json');
-    const hospitals = loadDataFromFile('./src/data/hospital-locations.json', { optional: true });
+    const walmarts = loadDataset('walmart-locations.json');
+    const linacs = loadDataset('linac-locations.json');
+    const hospitals = loadDataset('hospital-locations.json');
 
     const seen = new Map(); // code -> [sources]
     const note = (code, src) => {
