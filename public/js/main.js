@@ -100,7 +100,8 @@ const Z_INDEX_HOSPITAL = 0;
 
 /** Darker pin fills for contrast on the basemap (legend uses the same colors). */
 const PIN_LINAC_HEX = '#1A7A42';
-const PIN_HOSPITAL_HEX = '#C45200';
+const PIN_HOSPITAL_HEX = '#6B2FA3';
+const PIN_SYSTEMIC_HEX = '#1F1F1F';
 
 const MARKER_PIN_PATH =
     'M12.5 0C5.596 0 0 5.596 0 12.5c0 1.79.464 3.472 1.276 4.926L12.5 41l11.224-23.574A12.45 12.45 0 0 0 25 12.5C25 5.596 19.404 0 12.5 0z';
@@ -123,14 +124,9 @@ function makePinIcon(fillHex) {
 }
 
 const greenMarkerIcon = makePinIcon(PIN_LINAC_HEX);
-const orangeMarkerIcon = makePinIcon(PIN_HOSPITAL_HEX);
+const hospitalMarkerIcon = makePinIcon(PIN_HOSPITAL_HEX);
 
-const violetMarkerIcon = L.icon({
-    iconUrl: '/images/markers/marker-icon-violet.png',
-    iconSize: [12, 20],
-    iconAnchor: [6, 20],
-    popupAnchor: [1, -17]
-});
+const systemicMarkerIcon = makePinIcon(PIN_SYSTEMIC_HEX);
 
 function escapePopupText(s) {
     return String(s ?? '')
@@ -227,7 +223,7 @@ function walmartPopupHTML(marker, mode) {
 }
 
 /**
- * Apply the current layer-toggle state to all markers. A Walmart that is a gap renders red/violet
+ * Apply the current layer-toggle state to all markers. A Walmart that is a gap renders red (viable) / black (systemic)
  * only while the LINAC Gaps layer is on; otherwise it renders as a plain blue Walmart (or hides).
  */
 function applyLayerVisibility() {
@@ -246,7 +242,7 @@ function applyLayerVisibility() {
         let mode = null;
         if (ls.gaps && marker._isLinacGap) {
             mode = marker._isSystemicGap ? 'systemic' : 'gap';
-            marker.setIcon(mode === 'systemic' ? violetMarkerIcon : redMarkerIcon);
+            marker.setIcon(mode === 'systemic' ? systemicMarkerIcon : redMarkerIcon);
             marker.setZIndexOffset(mode === 'systemic' ? Z_INDEX_SYSTEMIC : Z_INDEX_GAP);
             marker.setOpacity(1);
         } else if (ls.walmarts) {
@@ -576,7 +572,7 @@ async function loadInitialMarkers() {
                 (!usBoundaryLayer || usBoundaryLayer.getBounds().contains(latLng))
             ) {
                 const marker = L.marker(latLng, {
-                    icon: orangeMarkerIcon,
+                    icon: hospitalMarkerIcon,
                     zIndexOffset: Z_INDEX_HOSPITAL
                 }).addTo(map);
                 marker.hospitalData = hospital;
@@ -598,7 +594,7 @@ async function loadInitialMarkers() {
             `[Map] Loaded from /api/map-data: ${data.walmart.length} Walmarts, ${data.linac.length} LINAC rows, general acute & critical access hospitals ${hospitalsRaw.length} (OPEN; markers inside US polygon + bbox)`
         );
         console.log(`Total LINAC Centers displayed on map (red markers): ${linacMarkers.length}`);
-        console.log(`Total general acute & critical access hospitals displayed (yellow pins): ${hospitalMarkers.length}`);
+        console.log(`Total general acute & critical access hospitals displayed (purple pins): ${hospitalMarkers.length}`);
         console.log(`LINAC entries with missing/invalid coordinates: ${missingCoordinates}`);
         console.log(`LINAC entries with coordinates outside US bounds: ${outsideUSBounds}`);
     } catch (error) {
@@ -1614,8 +1610,11 @@ function legendSwatchHtml(color, label) {
     if (color === 'green') {
         return `<img src="${pinIconDataUrl(PIN_LINAC_HEX)}" alt="${label}">`;
     }
-    if (color === 'orange') {
+    if (color === 'hospital') {
         return `<img src="${pinIconDataUrl(PIN_HOSPITAL_HEX)}" alt="${label}">`;
+    }
+    if (color === 'systemic') {
+        return `<img src="${pinIconDataUrl(PIN_SYSTEMIC_HEX)}" alt="${label}">`;
     }
     return `<img src="/images/markers/marker-icon-${color}.png" alt="${label}">`;
 }
@@ -1657,13 +1656,13 @@ function getLegendHTML() {
         rows.push(legendRow('red', 'Viable LINAC Gaps (Walmarts)', viableCount));
     }
     if (ls.gaps && gapSystemicCount > 0) {
-        rows.push(legendRow('violet', 'Systemic LINAC Gaps (Walmarts)', systemicCount));
+        rows.push(legendRow('systemic', 'Systemic LINAC Gaps (Walmarts)', systemicCount));
     }
     if (ls.linac) {
         rows.push(legendRow('green', 'LINAC Centers', linacCount));
     }
     if (ls.hospitals) {
-        rows.push(legendRow('orange', 'Hospitals (General Acute &amp; Critical Access)', hospitalCount));
+        rows.push(legendRow('hospital', 'Hospitals (General Acute &amp; Critical Access)', hospitalCount));
     }
 
     return rows.join('') || '<div class="text-muted small">No Layers Selected</div>';

@@ -171,7 +171,7 @@ LINAC/
 │   ├── index.html         # Shell UI: state, radius, buttons, map, modals
 │   ├── css/styles.css     # Layout and styling
 │   ├── js/main.js         # Leaflet map, markers, analysis UX, metrics table
-│   └── images/markers/    # Pin sprites (blue Walmart, red LINAC, yellow hospital)
+│   └── images/markers/    # Pin sprites (blue Walmart, red viable gap); LINAC (green), hospital (purple) and systemic-gap (black) pins are inline SVG in main.js
 ├── src/data/
 │   ├── walmart-locations.json   # Walmart records (state, address, lat/lng)
 │   ├── linac-locations.json     # LINAC records (name, Cities, States, lat/lng, counts)
@@ -225,7 +225,7 @@ Static assets (HTML, JS, CSS, images) are served from `public/`.
 ### Startup (`DOMContentLoaded` → `initializeApp`)
 
 1. **`initializeMap`** – Creates the Leaflet map, OSM layer, legend, fetches `/api/state-boundary/US`, draws the US outline, then **`loadInitialMarkers`**.  
-2. **`loadInitialMarkers`** – `GET /api/map-data?initial=true` with cache-busting; clears marker arrays; adds Walmart markers inside the US GeoJSON bounds; LINAC (**red**) and general acute & critical access hospital (**yellow**, same pin shape as WAL/LINAC) with US bounding-box validation; marker clicks **pan/zoom** the map.  
+2. **`loadInitialMarkers`** – `GET /api/map-data?initial=true` with cache-busting; clears marker arrays; adds Walmart markers inside the US GeoJSON bounds; LINAC (**green**) and general acute & critical access hospital (**purple**, same pin shape as WAL/LINAC) with US bounding-box validation; marker clicks **pan/zoom** the map.  
 3. **`populateStateDropdown`** – Loads states, prepends “United States” (`US`), default-selects `US`. Markers load from **`initializeMap`** (not from the dropdown handler).  
 4. **`initializeEventListeners`** – Drive-time slider, Run Analysis, toggles, dashboard, table view, modals.
 
