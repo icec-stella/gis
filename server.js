@@ -187,10 +187,27 @@ function hospitalTerritoryExcluded(h) {
     return EXCLUDED_HOSPITAL_TERRITORY_STATES.has(String(h.STATE ?? '').trim().toUpperCase());
 }
 
-/** Hospitals used for routing + map: OPEN + (general acute care | critical access) + valid coords; no excluded territories. */
+/**
+ * HIFLD IDs of hospitals that also appear in linac-locations.json as RT centers (the 91 verified
+ * LINAC facilities absent from DIRAC). They are dropped from the hospital inventory to avoid
+ * counting one facility as both a LINAC center and a backstop hospital. Kept as an ID list
+ * (not edits to hospital-locations.json) so a refreshed HIFLD export can't silently re-add them.
+ */
+const LINAC_DUPLICATE_HOSPITAL_IDS = new Set(
+    (loadDataFromFile('./src/data/hospital-linac-exclusions.json').hospitals || []).map((h) =>
+        String(h.ID)
+    )
+);
+
+function hospitalIsLinacDuplicate(h) {
+    return LINAC_DUPLICATE_HOSPITAL_IDS.has(String(h.ID ?? ''));
+}
+
+/** Hospitals used for routing + map: OPEN + (general acute care | critical access) + valid coords; no excluded territories or LINAC duplicates. */
 function hospitalRowEligibleRoute(h) {
     return (
         !hospitalTerritoryExcluded(h) &&
+        !hospitalIsLinacDuplicate(h) &&
         hospitalRowHasValidCoords(h) &&
         String(h.STATUS || '').toUpperCase() === 'OPEN' &&
         hospitalEligibleType(h)

@@ -1,0 +1,757 @@
+{
+  "description": "HIFLD hospital rows excluded from the hospital backstop inventory because the facility operates LINACs and is listed in linac-locations.json (the 91 verified facilities absent from DIRAC). Matched by HIFLD ID so a refreshed HIFLD export cannot silently re-add them. Originally removed from hospital-locations.json in commit 0ecca8b (2026-09-22).",
+  "hospitals": [
+    {
+      "ID": 45295422,
+      "NAME": "ADVENTIST HEALTH CLEARLAKE",
+      "CITY": "CLEARLAKE",
+      "STATE": "CA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 572601,
+      "NAME": "NORTH ARKANSAS REGIONAL MEDICAL CENTER",
+      "CITY": "HARRISON",
+      "STATE": "AR",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 5759501,
+      "NAME": "NORTHERN MONTANA HOSPITAL",
+      "CITY": "HAVRE",
+      "STATE": "MT",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 6454143,
+      "NAME": "AURORA MEDICAL CENTER BAY AREA",
+      "CITY": "MARINETTE",
+      "STATE": "WI",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 699669,
+      "NAME": "CENTRAL PENINSULA GENERAL HOSPITAL",
+      "CITY": "SOLDOTNA",
+      "STATE": "AK",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 6538242,
+      "NAME": "HENRY COUNTY MEDICAL CENTER",
+      "CITY": "PARIS",
+      "STATE": "TN",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 23376450,
+      "NAME": "GRAHAM REGIONAL MEDICAL CENTER",
+      "CITY": "GRAPEVINE",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 23777964,
+      "NAME": "LAVACA MEDICAL CENTER",
+      "CITY": "HARLINGEN",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 31375951,
+      "NAME": "CHRISTUS JASPER MEMORIAL HOSPITAL",
+      "CITY": "JASPER",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 40375965,
+      "NAME": "NACOGDOCHES MEDICAL CENTER",
+      "CITY": "NACOGDOCHES",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 54378801,
+      "NAME": "UVALDE MEMORIAL HOSPITAL",
+      "CITY": "UVALDE",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 1865807,
+      "NAME": "COX MEDICAL CENTERS SOUTH HOSPITAL",
+      "CITY": "SPRINGFIELD",
+      "STATE": "MO",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 4439303,
+      "NAME": "ALLIANCE HEALTH SYSTEM",
+      "CITY": "MERIDIAN",
+      "STATE": "MS",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 9627910,
+      "NAME": "VIDANT ROANOKE-CHOWAN HOSPITAL",
+      "CITY": "AHOSKIE",
+      "STATE": "NC",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 4258801,
+      "NAME": "CHI ST ALEXIUS HEALTH WILLISTON",
+      "CITY": "WILLISTON",
+      "STATE": "ND",
+      "TYPE": "CRITICAL ACCESS",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 12233872,
+      "NAME": "ADVENTHEALTH SEBRING",
+      "CITY": "SEBRING",
+      "STATE": "FL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 3836427,
+      "NAME": "D. W. MCMILLAN MEMORIAL HOSPITAL",
+      "CITY": "BREWTON",
+      "STATE": "AL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2632401,
+      "NAME": "BAY AREA CENTER SACRED HEART HEALTH SYSTEM",
+      "CITY": "PANAMA CITY",
+      "STATE": "FL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 9476804,
+      "NAME": "BROWNWOOD REGIONAL MEDICAL CENTER",
+      "CITY": "BROWNWOOD",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 36075904,
+      "NAME": "WOODLAND HEIGHTS MEDICAL CENTER",
+      "CITY": "LUFKIN",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 39775961,
+      "NAME": "NACOGDOCHES MEMORIAL HOSPITAL",
+      "CITY": "NACOGDOCHES",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 53075504,
+      "NAME": "CHRISTUS ST. MICHAEL HEALTH SYSTEM",
+      "CITY": "TEXARKANA",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 54777901,
+      "NAME": "CITIZENS MEDICAL CENTER",
+      "CITY": "VICTORIA",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 4435631,
+      "NAME": "ELIZA COFFEE MEMORIAL HOSPITAL",
+      "CITY": "FLORENCE",
+      "STATE": "AL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 71893436,
+      "NAME": "LOMPOC VALLEY MEDICAL CENTER COMPREHENSIVE CARE CENTER D/P S",
+      "CITY": "LOMPOC",
+      "STATE": "CA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 4549770,
+      "NAME": "MCLAREN NORTHERN MICHIGAN",
+      "CITY": "PETOSKEY",
+      "STATE": "MI",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2764735,
+      "NAME": "GOLDEN VALLEY MEMORIAL HOSPITAL",
+      "CITY": "CLINTON",
+      "STATE": "MO",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 5838935,
+      "NAME": "GREENWOOD LEFLORE HOSPITAL",
+      "CITY": "GREENWOOD",
+      "STATE": "MS",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 11271457,
+      "NAME": "NATCHITOCHES REGIONAL MEDICAL CENTER",
+      "CITY": "NATCHITOCHES",
+      "STATE": "LA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 86831501,
+      "NAME": "MEMORIAL SATILLA HEALTH",
+      "CITY": "WAYCROSS",
+      "STATE": "GA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 1771730,
+      "NAME": "MEDICAL CENTER OF SOUTH ARKANSAS",
+      "CITY": "EL DORADO",
+      "STATE": "AR",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 883440,
+      "NAME": "MADISON MEMORIAL HOSPITAL",
+      "CITY": "REXBURG",
+      "STATE": "ID",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2800733,
+      "NAME": "HOSP EPISCOPAL SAN LUCAS 2",
+      "CITY": "PONCE",
+      "STATE": "PR",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 9786442,
+      "NAME": "WESTERN ARIZONA REGIONAL MEDICAL CENTER",
+      "CITY": "BULLHEAD CITY",
+      "STATE": "AZ",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 18671203,
+      "NAME": "ALLEGIANCE HEALTH CENTER OF MONROE",
+      "CITY": "MONROE",
+      "STATE": "LA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 5938930,
+      "NAME": "GREENWOOD AMG SPECIALTY HOSPITAL",
+      "CITY": "GREENWOOD",
+      "STATE": "MS",
+      "TYPE": "LONG TERM CARE",
+      "STATUS": "CLOSED"
+    },
+    {
+      "ID": 13575835,
+      "NAME": "NAVARRO REGIONAL HOSPITAL",
+      "CITY": "CORSICANA",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 12092243,
+      "NAME": "EL CENTRO REGIONAL MEDICAL CENTER",
+      "CITY": "EL CENTRO",
+      "STATE": "CA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 34992227,
+      "NAME": "PIONEERS MEMORIAL HOSPITAL",
+      "CITY": "BRAWLEY",
+      "STATE": "CA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 7971291,
+      "NAME": "GLENWOOD REGIONAL MEDICAL CENTER",
+      "CITY": "WEST MONROE",
+      "STATE": "LA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 44195370,
+      "NAME": "ADVENTIST HEALTH SONORA GREENLEY",
+      "CITY": "SONORA",
+      "STATE": "CA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 272653,
+      "NAME": "BAXTER REGIONAL MEDICAL CENTER",
+      "CITY": "MOUNTAIN HOME",
+      "STATE": "AR",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 7272801,
+      "NAME": "ST. MARY'S REGIONAL MEDICAL CENTER",
+      "CITY": "RUSSELLVILLE",
+      "STATE": "AR",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 3265065,
+      "NAME": "LAKE REGIONAL HEALTH SYSTEM",
+      "CITY": "OSAGE BEACH",
+      "STATE": "MO",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 10827959,
+      "NAME": "THE OUTER BANKS HOSPITAL",
+      "CITY": "NAGS HEAD",
+      "STATE": "NC",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 33077566,
+      "NAME": "CHI ST LUKES HEALTH - BRAZOSPORT",
+      "CITY": "LAKE JACKSON",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 34677351,
+      "NAME": "CHI ST LUKES HEALTH - MEMORIAL LIVINGSTON",
+      "CITY": "LIVINGSTON",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 81977904,
+      "NAME": "DETAR NORTH",
+      "CITY": "VICTORIA",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 12651601,
+      "NAME": "SHENANDOAH MEMORIAL HOSPITAL",
+      "CITY": "SHENANDOAH",
+      "STATE": "IA",
+      "TYPE": "CRITICAL ACCESS",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 10930458,
+      "NAME": "EAST GEORGIA REGIONAL MEDICAL CENTER",
+      "CITY": "STATESBORO",
+      "STATE": "GA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 5559701,
+      "NAME": "ST JAMES HEALTHCARE",
+      "CITY": "BUTTE",
+      "STATE": "MT",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 10838701,
+      "NAME": "DELTA REGIONAL MEDICAL CENTER",
+      "CITY": "GREENVILLE",
+      "STATE": "MS",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 4639301,
+      "NAME": "ANDERSON REGIONAL MEDICAL CENTER",
+      "CITY": "MERIDIAN",
+      "STATE": "MS",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 882902,
+      "NAME": "MEMORIAL HOSPITAL OF SWEETWATER COUNTY",
+      "CITY": "ROCK SPRINGS",
+      "STATE": "WY",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 3682716,
+      "NAME": "CAMPBELL COUNTY MEMORIAL HOSPITAL",
+      "CITY": "GILLETTE",
+      "STATE": "WY",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 1082001,
+      "NAME": "CHEYENNE REGIONAL MEDICAL CENTER",
+      "CITY": "CHEYENNE",
+      "STATE": "WY",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2985501,
+      "NAME": "COBRE VALLEY REGIONAL MEDICAL CENTER",
+      "CITY": "GLOBE",
+      "STATE": "AZ",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 7836461,
+      "NAME": "MONROE COUNTY HOSPITAL",
+      "CITY": "MONROEVILLE",
+      "STATE": "AL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 10935661,
+      "NAME": "SHOALS HOSPITAL",
+      "CITY": "MUSCLE SHOALS",
+      "STATE": "AL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 10035594,
+      "NAME": "NORTHWEST MEDICAL CENTER",
+      "CITY": "WINFIELD",
+      "STATE": "AL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2488101,
+      "NAME": "PLAINS REGIONAL MEDICAL CENTER CLOVIS",
+      "CITY": "CLOVIS",
+      "STATE": "NM",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 14632405,
+      "NAME": "GULF COAST MEDICAL CENTER",
+      "CITY": "PANAMA CITY",
+      "STATE": "FL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 12123413,
+      "NAME": "RIVERSIDE SHORE MEMORIAL HOSPITAL",
+      "CITY": "NASSAWADOX",
+      "STATE": "VA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 11171201,
+      "NAME": "MONROE SURGICAL HOSPITAL",
+      "CITY": "MONROE",
+      "STATE": "LA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 13771291,
+      "NAME": "OUACHITA COMMUNITY HOSPITAL",
+      "CITY": "WEST MONROE",
+      "STATE": "LA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 5756258,
+      "NAME": "AVERA MARSHALL REG MED CENTER",
+      "CITY": "MARSHALL",
+      "STATE": "MN",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 1656002,
+      "NAME": "MAYO CLINIC HEALTH SYS MANKATO",
+      "CITY": "MANKATO",
+      "STATE": "MN",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 133697801,
+      "NAME": "ST ANTHONY HOSPITAL",
+      "CITY": "PENDLETON",
+      "STATE": "OR",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 8585901,
+      "NAME": "SUMMIT HEALTHCARE ASSOCIATION",
+      "CITY": "SHOW LOW",
+      "STATE": "AZ",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 5087401,
+      "NAME": "SAN JUAN REGIONAL MEDICAL CENTER",
+      "CITY": "FARMINGTON",
+      "STATE": "NM",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 6269001,
+      "NAME": "COMMUNITY HOSPITAL",
+      "CITY": "MCCOOK",
+      "STATE": "NE",
+      "TYPE": "CRITICAL ACCESS",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 5857078,
+      "NAME": "AVERA SACRED HEART HOSPITAL",
+      "CITY": "YANKTON",
+      "STATE": "SD",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2556201,
+      "NAME": "CARRIS HEALTH LLC-RICE MEMORIAL HOSPITAL",
+      "CITY": "WILLMAR",
+      "STATE": "MN",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2497471,
+      "NAME": "MERCY MEDICAL CENTER",
+      "CITY": "ROSEBURG",
+      "STATE": "OR",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 1205701,
+      "NAME": "RUTLAND REGIONAL MEDICAL CENTER",
+      "CITY": "RUTLAND",
+      "STATE": "VT",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 51775501,
+      "NAME": "WADLEY REGIONAL MEDICAL CENTER",
+      "CITY": "TEXARKANA",
+      "STATE": "TX",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 7030458,
+      "NAME": "WILLINGWAY HOSPITAL",
+      "CITY": "STATESBORO",
+      "STATE": "GA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 349707,
+      "NAME": "MIDMICHIGAN MEDICAL CENTER ALPENA",
+      "CITY": "ALPENA",
+      "STATE": "MI",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 499901,
+      "NAME": "PEACEHEALTH KETCHIKAN MEDICAL CENTER",
+      "CITY": "KETCHIKAN",
+      "STATE": "AK",
+      "TYPE": "CRITICAL ACCESS",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2996766,
+      "NAME": "WILCOX MEMORIAL HOSPITAL",
+      "CITY": "LIHUE",
+      "STATE": "HI",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 1787301,
+      "NAME": "GALLUP INDIAN MEDICAL CENTER",
+      "CITY": "GALLUP",
+      "STATE": "NM",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 5326241,
+      "NAME": "DAVIS MEDICAL CENTER",
+      "CITY": "ELKINS",
+      "STATE": "WV",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 8498837,
+      "NAME": "SAMARITAN HEALTHCARE",
+      "CITY": "MOSES LAKE",
+      "STATE": "WA",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 4069101,
+      "NAME": "GREAT PLAINS REGIONAL MEDICAL CENTER",
+      "CITY": "NORTH PLATTE",
+      "STATE": "NE",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 10969162,
+      "NAME": "SIDNEY REGIONAL MEDICAL CENTER",
+      "CITY": "SIDNEY",
+      "STATE": "NE",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 4169162,
+      "NAME": "SIDNEY REGIONAL MEDICAL CENTER",
+      "CITY": "SIDNEY",
+      "STATE": "NE",
+      "TYPE": "LONG TERM CARE",
+      "STATUS": "CLOSED"
+    },
+    {
+      "ID": 5859601,
+      "NAME": "ST PETERS HOSPITAL",
+      "CITY": "HELENA",
+      "STATE": "MT",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 4038655,
+      "NAME": "BAPTIST MEMORIAL HOSPITAL - NORTH MS",
+      "CITY": "OXFORD",
+      "STATE": "MS",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "CLOSED"
+    },
+    {
+      "ID": 2338614,
+      "NAME": "NORTHWEST MISSISSIPPI REGIONAL MEDICAL CENTER",
+      "CITY": "CLARKSDALE",
+      "STATE": "MS",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 8539649,
+      "NAME": "SOUTHWEST MS REGIONAL MEDICAL CENTER",
+      "CITY": "MCCOMB",
+      "STATE": "MS",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 2959301,
+      "NAME": "HOLY ROSARY HEALTHCARE",
+      "CITY": "MILES CITY",
+      "STATE": "MT",
+      "TYPE": "CRITICAL ACCESS",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 7480751,
+      "NAME": "STERLING REGIONAL MEDCENTER",
+      "CITY": "STERLING",
+      "STATE": "CO",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 195436278,
+      "NAME": "TANNER MEDICAL CENTER/EAST ALABAMA",
+      "CITY": "WEDOWEE",
+      "STATE": "AL",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    },
+    {
+      "ID": 195238655,
+      "NAME": "BAPTIST MEMORIAL HOSPITAL NORTH MS",
+      "CITY": "OXFORD",
+      "STATE": "MS",
+      "TYPE": "GENERAL ACUTE CARE",
+      "STATUS": "OPEN"
+    }
+  ]
+}
