@@ -100,7 +100,7 @@ const Z_INDEX_HOSPITAL = 0;
 
 /** Darker pin fills for contrast on the basemap (legend uses the same colors). */
 const PIN_LINAC_HEX = '#1A7A42';
-const PIN_HOSPITAL_HEX = '#6B2FA3';
+const PIN_HOSPITAL_HEX = '#B57EDC';
 const PIN_SYSTEMIC_HEX = '#1F1F1F';
 
 const MARKER_PIN_PATH =
